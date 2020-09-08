@@ -53,7 +53,7 @@ let expected = Model {
     names: vec!["Johan".to_string(), "Frederick".to_string()],
 };
 
-let actual: Model = TextDeserializer::from_slice(data)?;
+let actual: Model = TextDeserializer::from_windows1252(data)?;
 assert_eq!(actual, expected);
 # }
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -80,7 +80,7 @@ let data = [ 0x82, 0x2d, 0x01, 0x00, 0x0f, 0x00, 0x03, 0x00, 0x45, 0x4e, 0x47 ];
 let mut map = HashMap::new();
 map.insert(0x2d82, "field1");
 
-let actual: MyStruct = BinaryDeserializer::from_slice(&data[..], &map)?;
+let actual: MyStruct = BinaryDeserializer::from_eu4(&data[..], &map)?;
 assert_eq!(actual, MyStruct { field1: "ENG".to_string() });
 # }
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -107,24 +107,24 @@ files that embed operators other than equals.
 ## One Level Lower
 
 If the automatic deserialization via `JominiDeserialize` is too high level, one can
-interact with the raw data directly via `TextTape` and `BinaryTape`.
+interact with the raw data directly via `TextParser` and `BinaryParser`.
 
 ```rust
-use jomini::{TextTape, TextToken, Scalar};
+use jomini::{TextParser, TextToken, Scalar1252};
 
 let data = b"foo=bar";
 
 assert_eq!(
-    TextTape::from_slice(&data[..])?.tokens(),
+    TextParser::from_windows1252(&data[..])?.tokens(),
     &[
-        TextToken::Scalar(Scalar::new(b"foo")),
-        TextToken::Scalar(Scalar::new(b"bar")),
+        TextToken::Scalar(Scalar1252::new(b"foo")),
+        TextToken::Scalar(Scalar1252::new(b"bar")),
     ]
 );
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-If one will only use `TextTape` and `BinaryTape` then `jomini` can be compiled without default
+If one will only use `TextParser` and `BinaryParser` then `jomini` can be compiled without default
 features, resulting in a build without dependencies.
 */
 

@@ -80,7 +80,7 @@ pub fn binary_deserialize_benchmark(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("binary", |b| {
         b.iter(|| {
-            let _res: Meta = BinaryDeserializer::from_slice(&data[..], &map).unwrap();
+            let _res: Meta = BinaryDeserializer::from_eu4(&data[..], &map).unwrap();
         })
     });
     group.finish();
@@ -97,7 +97,7 @@ pub fn text_deserialize_benchmark(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("text", |b| {
         b.iter(|| {
-            let _res: Meta = TextDeserializer::from_slice(&data[..]).unwrap();
+            let _res: Meta = TextDeserializer::from_windows1252(&data[..]).unwrap();
         })
     });
     group.finish();
@@ -110,7 +110,7 @@ pub fn binary_parse_benchmark(c: &mut Criterion) {
     group.bench_function("binary", |b| {
         let mut tape = BinaryTape::new();
         b.iter(move || {
-            BinaryParser::windows_1252_parser()
+            BinaryParser::eu4_parser()
                 .parse_slice_into_tape(&data[..], &mut tape)
                 .unwrap();
         })

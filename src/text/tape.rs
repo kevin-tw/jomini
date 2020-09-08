@@ -5,28 +5,34 @@ use crate::{
 };
 use crate::{Error, ErrorKind, Rgb, Scalar};
 
+/// High level structure for parsing plain text data
 pub struct TextParser;
 
 impl TextParser {
+    /// Creates a parser tailored to the given encoding
     pub fn from_encoding<'a, E>(encoding: E) -> TextTapeParser<E>
     where
         E: Encoding<'a>,
     {
-        TextTapeParser::with_flavor(encoding)
+        TextTapeParser::with_encoding(encoding)
     }
 
+    /// Creates a parser for ingesting uft-8 encoded data
     pub fn utf8_parser() -> TextTapeParser<Utf8> {
-        TextTapeParser::with_flavor(Utf8::new())
+        TextTapeParser::with_encoding(Utf8::new())
     }
 
+    /// Parses utf-8 encoded data into a tape
     pub fn from_utf8(data: &[u8]) -> Result<TextTape<ScalarUtf8>, Error> {
         Self::utf8_parser().parse_slice(data)
     }
 
+    /// Creates a parser for ingesting windows-1252 encoded data
     pub fn windows1252_parser() -> TextTapeParser<Windows1252> {
-        TextTapeParser::with_flavor(Windows1252::new())
+        TextTapeParser::with_encoding(Windows1252::new())
     }
 
+    /// Parses windows-1252 encoded data into a tape
     pub fn from_windows1252(data: &[u8]) -> Result<TextTape<Scalar1252>, Error> {
         Self::windows1252_parser().parse_slice(data)
     }
@@ -54,7 +60,7 @@ pub enum TextToken<S> {
 /// Creates a parser that a writes to a text tape
 #[derive(Debug, Default)]
 pub struct TextTapeParser<F> {
-    flavor: F,
+    encoding: F,
 }
 
 impl<'a, F> TextTapeParser<F>
@@ -62,8 +68,8 @@ where
     F: Encoding<'a>,
 {
     /// Create a binary parser with a given flavor
-    pub fn with_flavor(flavor: F) -> Self {
-        TextTapeParser { flavor }
+    pub fn with_encoding(flavor: F) -> Self {
+        TextTapeParser { encoding: flavor }
     }
 
     /// Parse the text format and return the data tape
@@ -87,7 +93,7 @@ where
             data,
             original_length: data.len(),
             token_tape,
-            flavor: self.flavor,
+            flavor: self.encoding,
         };
 
         state.parse()?;
@@ -134,29 +140,6 @@ where
             token_tape: Vec::new(),
         }
     }
-
-    // /// Convenience method for creating a text parser and parsing the given input
-    // pub fn from_slice(data: &[u8]) -> Result<TextTape<'_>, Error> {
-    //     TextTapeParser.parse_slice(data)
-    // }
-
-    // /// Returns a parser for text data
-    // pub fn parser() -> TextTapeParser {
-    //     TextTapeParser
-    // }
-
-    /// Returns a parser for the default flavor of binary data
-    // pub fn parser1252<'b>() -> TextTapeParser<Windows1252<'b>> {
-    //     TextTape::parser_flavor(Windows1252::new())
-    // }
-
-    /// Returns a parser for a given flavor of binary data
-    // pub fn parser_flavor<F>(flavor: F) -> TextTapeParser<F>
-    // where
-    //     F: TextFlavor<'a>,
-    // {
-    //     TextTapeParser::with_flavor(flavor)
-    // }
 
     /// Return the parsed tokens
     pub fn tokens(&self) -> &[TextToken<S>] {
@@ -1252,5 +1235,18 @@ mod tests {
     fn test_initial_end_does_not_panic() {
         let res = parse(&b"}"[..]);
         assert!(res.is_ok() || res.is_err());
+    }
+
+    #[test]
+    fn test_utf8_parser() {
+        let data = r#"meta_title_name="Chiefdom of Jåhkåmåhkke""#;
+        let tape = TextParser::from_utf8(data.as_bytes()).unwrap();
+        assert_eq!(
+            tape.tokens(),
+            vec![
+                TextToken::Scalar(ScalarUtf8::new("meta_title_name".as_bytes())),
+                TextToken::Scalar(ScalarUtf8::new("Chiefdom of Jåhkåmåhkke".as_bytes())),
+            ]
+        );
     }
 }

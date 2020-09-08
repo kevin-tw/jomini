@@ -1,6 +1,7 @@
 use crate::{
-    de::ColorSequence, BinaryFlavor, BinaryParser, BinaryTape, BinaryToken, DefaultFlavor,
-    DeserializeError, DeserializeErrorKind, Error, FailedResolveStrategy, Scalar, TokenResolver,
+    de::ColorSequence, BinaryFlavor, BinaryParser, BinaryTape, BinaryToken, Ck3Flavor,
+    DeserializeError, DeserializeErrorKind, Error, Eu4Flavor, FailedResolveStrategy, Scalar,
+    TokenResolver,
 };
 use serde::de::{self, Deserialize, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use std::borrow::Cow;
@@ -13,7 +14,7 @@ use std::borrow::Cow;
 /// The example below demonstrates multiple ways to deserialize data
 ///
 /// ```
-/// use jomini::{BinaryDeserializer, BinaryTape};
+/// use jomini::{BinaryDeserializer, BinaryParser};
 /// use serde::Deserialize;
 /// use std::collections::HashMap;
 ///
@@ -46,14 +47,14 @@ use std::borrow::Cow;
 /// map.insert(0x2d83, String::from("field2"));
 ///
 /// // the data can be parsed and deserialized in one step
-/// let a: StructA = BinaryDeserializer::from_slice(&data[..], &map)?;
+/// let a: StructA = BinaryDeserializer::from_eu4(&data[..], &map)?;
 /// assert_eq!(a, StructA {
 ///   b: StructB { field1: "ENG".to_string() },
 ///   c: StructC { field2: "ENH".to_string() },
 /// });
 ///
 /// // or split into two steps, whatever is appropriate.
-/// let tape = BinaryTape::from_slice(&data[..])?;
+/// let tape = BinaryParser::from_eu4(&data[..])?;
 /// let b: StructB = BinaryDeserializer::from_tape(&tape, &map)?;
 /// let c: StructC = BinaryDeserializer::from_tape(&tape, &map)?;
 /// assert_eq!(b, StructB { field1: "ENG".to_string() });
@@ -63,22 +64,17 @@ use std::borrow::Cow;
 pub struct BinaryDeserializer;
 
 impl BinaryDeserializer {
-    /// Create a builder to custom binary deserialization
-    pub fn builder() -> BinaryDeserializerBuilder<DefaultFlavor> {
-        BinaryDeserializerBuilder::with_flavor(DefaultFlavor::new())
-    }
-
-    // /// A customized builder for a certain flavor of binary data
-    pub fn builder_flavor<'a, F>(flavor: F) -> BinaryDeserializerBuilder<F>
+    /// A customized builder for a certain flavor of binary data
+    pub fn builder_flavor<'a, F>(flavor: F) -> FlavoredBinaryDeserializerBuilder<F>
     where
         F: BinaryFlavor<'a>,
     {
-        BinaryDeserializerBuilder::with_flavor(flavor)
+        FlavoredBinaryDeserializerBuilder::with_flavor(flavor)
     }
 
     /// Deserialize a structure from the given binary data. Convenience method
     /// that combines parsing and deserialization in one step
-    pub fn from_slice<'de, 'res: 'de, RES, T>(
+    pub fn from_eu4<'de, 'res: 'de, RES, T>(
         data: &'de [u8],
         resolver: &'res RES,
     ) -> Result<T, Error>
@@ -86,7 +82,20 @@ impl BinaryDeserializer {
         T: Deserialize<'de>,
         RES: TokenResolver,
     {
-        BinaryDeserializer::builder()
+        BinaryDeserializer::builder_flavor(Eu4Flavor::new())
+            .on_failed_resolve(FailedResolveStrategy::Ignore)
+            .from_slice(data, resolver)
+    }
+
+    pub fn from_ck3<'de, 'res: 'de, RES, T>(
+        data: &'de [u8],
+        resolver: &'res RES,
+    ) -> Result<T, Error>
+    where
+        T: Deserialize<'de>,
+        RES: TokenResolver,
+    {
+        BinaryDeserializer::builder_flavor(Ck3Flavor::new())
             .on_failed_resolve(FailedResolveStrategy::Ignore)
             .from_slice(data, resolver)
     }
@@ -102,16 +111,56 @@ impl BinaryDeserializer {
         RES: TokenResolver,
         S: Scalar<'de>,
     {
-        BinaryDeserializer::builder()
+        BinaryDeserializerBuilder::new()
             .on_failed_resolve(FailedResolveStrategy::Ignore)
             .from_tape(tape, resolver)
+    }
+}
+
+pub struct BinaryDeserializerBuilder {
+    failed_resolve_strategy: FailedResolveStrategy,
+}
+
+impl BinaryDeserializerBuilder {
+    pub fn new() -> Self {
+        BinaryDeserializerBuilder {
+            failed_resolve_strategy: FailedResolveStrategy::Ignore,
+        }
+    }
+
+    /// Set the behavior when a unknown token is encountered
+    pub fn on_failed_resolve(&mut self, strategy: FailedResolveStrategy) -> &mut Self {
+        self.failed_resolve_strategy = strategy;
+        self
+    }
+
+    pub fn from_tape<'de, 'res: 'de, RES, T, S>(
+        &self,
+        tape: &BinaryTape<S>,
+        resolver: &'res RES,
+    ) -> Result<T, Error>
+    where
+        T: Deserialize<'de>,
+        RES: TokenResolver,
+        S: Scalar<'de>,
+    {
+        let config = BinaryConfig {
+            resolver,
+            failed_resolve_strategy: self.failed_resolve_strategy,
+        };
+
+        let mut deserializer = RootDeserializer {
+            tokens: tape.tokens(),
+            config: &config,
+        };
+        Ok(T::deserialize(&mut deserializer)?)
     }
 }
 
 /// Build a tweaked binary deserializer
 ///
 /// ```
-/// use jomini::{BinaryDeserializer, BinaryTape, FailedResolveStrategy};
+/// use jomini::{BinaryDeserializerBuilder, BinaryParser, FailedResolveStrategy};
 /// use serde::Deserialize;
 /// use std::collections::HashMap;
 ///
@@ -134,10 +183,10 @@ impl BinaryDeserializer {
 /// map.insert(0x2d82, String::from("field1"));
 /// map.insert(0x2d83, String::from("field2"));
 ///
-/// let mut deserializer = BinaryDeserializer::builder();
+/// let mut deserializer = BinaryDeserializerBuilder::new();
 /// deserializer.on_failed_resolve(FailedResolveStrategy::Error);
 ///
-/// let tape = BinaryTape::from_slice(&data[..])?;
+/// let tape = BinaryParser::from_eu4(&data[..])?;
 /// let b: StructB = deserializer.from_tape(&tape, &map)?;
 /// let c: StructC = deserializer.from_tape(&tape, &map)?;
 /// assert_eq!(b, StructB { field1: "ENG".to_string() });
@@ -145,18 +194,18 @@ impl BinaryDeserializer {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug)]
-pub struct BinaryDeserializerBuilder<F> {
+pub struct FlavoredBinaryDeserializerBuilder<F> {
     failed_resolve_strategy: FailedResolveStrategy,
     flavor: F,
 }
 
-impl<'z, F> BinaryDeserializerBuilder<F>
+impl<'z, F> FlavoredBinaryDeserializerBuilder<F>
 where
     F: BinaryFlavor<'z>,
 {
     /// Create a new builder instance
     pub fn with_flavor(flavor: F) -> Self {
-        BinaryDeserializerBuilder {
+        FlavoredBinaryDeserializerBuilder {
             failed_resolve_strategy: FailedResolveStrategy::Ignore,
             flavor,
         }
@@ -179,16 +228,9 @@ where
         RES: TokenResolver,
         S: Scalar<'a>,
     {
-        let config = BinaryConfig {
-            resolver,
-            failed_resolve_strategy: self.failed_resolve_strategy,
-        };
-
-        let mut deserializer = RootDeserializer {
-            tokens: tape.tokens(),
-            config: &config,
-        };
-        Ok(T::deserialize(&mut deserializer)?)
+        BinaryDeserializerBuilder::new()
+            .on_failed_resolve(self.failed_resolve_strategy)
+            .from_tape(tape, resolver)
     }
 
     /// Convenience method for parsing and deserializing binary data in a single step
@@ -201,7 +243,7 @@ where
         T: Deserialize<'a>,
         RES: TokenResolver,
     {
-        let tape = BinaryParser::from_windows1252_slice(data)?;
+        let tape = BinaryParser::from_eu4(data)?;
         Ok(self.from_tape(&tape, resolver)?)
     }
 }
@@ -635,7 +677,7 @@ mod tests {
         T: Deserialize<'a>,
         RES: TokenResolver,
     {
-        BinaryDeserializer::from_slice(data, resolver)
+        BinaryDeserializer::from_eu4(data, resolver)
     }
 
     #[test]
@@ -1186,7 +1228,7 @@ mod tests {
         }
 
         let map: HashMap<u16, String> = HashMap::new();
-        let actual: Result<MyStruct, _> = BinaryDeserializer::builder()
+        let actual: Result<MyStruct, _> = BinaryDeserializer::builder_flavor(Eu4Flavor::new())
             .on_failed_resolve(FailedResolveStrategy::Error)
             .from_slice(&data[..], &map);
         assert!(actual.is_err());
@@ -1199,7 +1241,7 @@ mod tests {
         ];
 
         let map: HashMap<u16, String> = HashMap::new();
-        let actual: HashMap<String, &str> = BinaryDeserializer::builder()
+        let actual: HashMap<String, &str> = BinaryDeserializer::builder_flavor(Eu4Flavor::new())
             .on_failed_resolve(FailedResolveStrategy::Stringify)
             .from_slice(&data[..], &map)
             .unwrap();

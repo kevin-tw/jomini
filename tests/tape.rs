@@ -1,9 +1,7 @@
 #[test]
 fn reject_bin_obj_in_hidden_obj() {
     let data = include_bytes!("./fixtures/nested-hidden-obj.bin");
-    assert!(jomini::BinaryParser::windows_1252_parser()
-        .parse_slice(&data[..])
-        .is_err());
+    assert!(jomini::BinaryParser::from_eu4(&data[..]).is_err());
 }
 
 #[test]

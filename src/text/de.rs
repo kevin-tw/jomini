@@ -7,13 +7,10 @@ use std::borrow::Cow;
 
 /// A structure to deserialize text data into Rust values.
 ///
-/// By default, if a token is unable to be resolved then it will be ignored by the default.
-/// Construct a custom instance through the `builder` method to tweak this behavior.
-///
 /// The example below demonstrates multiple ways to deserialize data
 ///
 /// ```
-/// use jomini::{TextDeserializer, TextTape};
+/// use jomini::{TextDeserializer, TextParser};
 /// use serde::Deserialize;
 ///
 /// #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -38,14 +35,14 @@ use std::borrow::Cow;
 /// let data = b"field1=ENG field2=ENH";
 ///
 /// // the data can be parsed and deserialized in one step
-/// let a: StructA = TextDeserializer::from_slice(&data[..])?;
+/// let a: StructA = TextDeserializer::from_windows1252(&data[..])?;
 /// assert_eq!(a, StructA {
 ///   b: StructB { field1: "ENG".to_string() },
 ///   c: StructC { field2: "ENH".to_string() },
 /// });
 ///
 /// // or split into two steps, whatever is appropriate.
-/// let tape = TextTape::from_slice(&data[..])?;
+/// let tape = TextParser::from_windows1252(&data[..])?;
 /// let b: StructB = TextDeserializer::from_tape(&tape)?;
 /// let c: StructC = TextDeserializer::from_tape(&tape)?;
 /// assert_eq!(b, StructB { field1: "ENG".to_string() });
@@ -55,12 +52,21 @@ use std::borrow::Cow;
 pub struct TextDeserializer;
 
 impl TextDeserializer {
-    /// Convenience method for parsing the given text data and deserializing
-    pub fn from_slice<'a, T>(data: &'a [u8]) -> Result<T, Error>
+    /// Convenience method for parsing the given text as windows 1252 format and deserializing
+    pub fn from_windows1252<'a, T>(data: &'a [u8]) -> Result<T, Error>
     where
         T: Deserialize<'a>,
     {
         let tape = TextParser::from_windows1252(data)?;
+        Ok(TextDeserializer::from_tape(&tape)?)
+    }
+
+    /// Convenience method for parsing the given text as utf8 format and deserializing
+    pub fn from_utf8<'a, T>(data: &'a [u8]) -> Result<T, Error>
+    where
+        T: Deserialize<'a>,
+    {
+        let tape = TextParser::from_utf8(data)?;
         Ok(TextDeserializer::from_tape(&tape)?)
     }
 
@@ -888,7 +894,7 @@ mod tests {
     where
         T: Deserialize<'a>,
     {
-        Ok(TextDeserializer::from_slice(data)?)
+        Ok(TextDeserializer::from_windows1252(data)?)
     }
 
     #[test]
@@ -1229,6 +1235,23 @@ mod tests {
                 campaign_stats: vec![Stat { id: 0 }, Stat { id: 1 },]
             }
         );
+    }
+
+    #[test]
+    fn test_utf8_deserialization() {
+        let data = r#"meta_title_name="Chiefdom of Jåhkåmåhkke""#;
+
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct MyStruct<'a> {
+            meta_title_name: &'a str,
+        }
+
+        let tape = TextParser::from_utf8(data.as_bytes()).unwrap();
+        let taped: MyStruct = TextDeserializer::from_tape(&tape).unwrap();
+        assert_eq!(taped.meta_title_name, "Chiefdom of Jåhkåmåhkke");
+
+        let sliced: MyStruct = TextDeserializer::from_utf8(data.as_bytes()).unwrap();
+        assert_eq!(sliced.meta_title_name, "Chiefdom of Jåhkåmåhkke");
     }
 
     #[test]

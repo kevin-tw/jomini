@@ -1,4 +1,4 @@
-use crate::{util::le_i32, Encoding, Scalar1252, Windows1252};
+use crate::{util::le_f32, util::le_i32, Encoding, Scalar1252, ScalarUtf8, Utf8, Windows1252};
 
 /// Trait customizing decoding values from binary data
 pub trait BinaryFlavor<'a>: Sized + Encoding<'a> {
@@ -9,23 +9,17 @@ pub trait BinaryFlavor<'a>: Sized + Encoding<'a> {
     fn visit_f32_2(&self, data: &[u8]) -> f32;
 }
 
-/// The default binary flavor
-#[derive(Debug)]
-pub struct DefaultFlavor(Windows1252);
+/// The eu4 binary flavor
+#[derive(Debug, Default)]
+pub struct Eu4Flavor(Windows1252);
 
-impl Default for DefaultFlavor {
-    fn default() -> Self {
-        DefaultFlavor::new()
-    }
-}
-
-impl DefaultFlavor {
+impl Eu4Flavor {
     pub fn new() -> Self {
-        DefaultFlavor(Windows1252::new())
+        Eu4Flavor(Windows1252::new())
     }
 }
 
-impl<'a> Encoding<'a> for DefaultFlavor {
+impl<'a> Encoding<'a> for Eu4Flavor {
     type ReturnScalar = Scalar1252<'a>;
 
     fn scalar(&self, data: &'a [u8]) -> Self::ReturnScalar {
@@ -33,7 +27,7 @@ impl<'a> Encoding<'a> for DefaultFlavor {
     }
 }
 
-impl<'a> BinaryFlavor<'a> for DefaultFlavor {
+impl<'a> BinaryFlavor<'a> for Eu4Flavor {
     fn visit_f32_1(&self, data: &[u8]) -> f32 {
         // First encoding is an i32 that has a fixed point offset of 3 decimal digits
         (le_i32(data) as f32) / 1000.0
@@ -44,5 +38,33 @@ impl<'a> BinaryFlavor<'a> for DefaultFlavor {
         // https://en.wikipedia.org/wiki/Q_(number_format)
         let val = le_i32(data) as f32 / 32768.0;
         (val * 10_0000.0).floor() / 10_0000.0
+    }
+}
+
+/// The ck3 binary flavor
+#[derive(Debug, Default)]
+pub struct Ck3Flavor(Utf8);
+
+impl Ck3Flavor {
+    pub fn new() -> Self {
+        Ck3Flavor(Utf8::new())
+    }
+}
+
+impl<'a> Encoding<'a> for Ck3Flavor {
+    type ReturnScalar = ScalarUtf8<'a>;
+
+    fn scalar(&self, data: &'a [u8]) -> Self::ReturnScalar {
+        self.0.scalar(data)
+    }
+}
+
+impl<'a> BinaryFlavor<'a> for Ck3Flavor {
+    fn visit_f32_1(&self, data: &[u8]) -> f32 {
+        le_f32(data)
+    }
+
+    fn visit_f32_2(&self, data: &[u8]) -> f32 {
+        (le_i32(data) as f32) / 1000.0
     }
 }

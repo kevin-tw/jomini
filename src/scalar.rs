@@ -104,9 +104,9 @@ impl<'a> fmt::Display for ScalarUtf8<'a> {
 /// Since windows-1252 is a single byte character encoding, a scalar will never fail to be created.
 ///
 /// ```
-/// use jomini::Scalar;
+/// use jomini::{Scalar, Scalar1252};
 ///
-/// let v1 = Scalar::new(b"10");
+/// let v1 = Scalar1252::new(b"10");
 /// assert_eq!(v1.to_utf8(), "10");
 /// assert_eq!(v1.to_u64(), Ok(10));
 /// assert_eq!(v1.to_i64(), Ok(10));
@@ -493,6 +493,19 @@ mod tests {
         assert!(s.to_f64().is_err());
         assert!(s.to_i64().is_err());
         assert!(s.to_u64().is_err());
+    }
+
+    #[test]
+    fn utf8_scalar_string() {
+        let scalar = ScalarUtf8::new("Jåhkåmåhkke".as_bytes());
+        assert_eq!(scalar.to_utf8(), "Jåhkåmåhkke");
+    }
+
+    #[test]
+    fn scalar_trait_test() {
+        let scalar = ScalarUtf8::new("abc".as_bytes());
+        let scalar2 = Scalar1252::new("abc".as_bytes());
+        assert_eq!(scalar.view_data(), scalar2.view_data());
     }
 
     #[quickcheck]
