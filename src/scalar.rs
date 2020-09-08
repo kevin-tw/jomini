@@ -253,8 +253,7 @@ fn to_f64(d: &[u8]) -> Result<f64, ScalarError> {
             let frac = to_i64(&trail)? as f64;
             let digits = 10u32
                 .checked_pow(trail.len() as u32)
-                .ok_or_else(|| ScalarError::Overflow)?
-                as f64;
+                .ok_or_else(|| ScalarError::Overflow)? as f64;
             Ok((sign as f64).mul_add(frac / digits, leadf))
         }
         None => to_i64(d).map(|x| x as f64),
@@ -321,8 +320,14 @@ mod tests {
 
     #[test]
     fn scalar_to_string() {
-        assert_eq!((Scalar1252 { data: &[255][..] }).to_string(), "ÿ".to_string());
-        assert_eq!((Scalar1252 { data: &[138][..] }).to_string(), "Š".to_string());
+        assert_eq!(
+            (Scalar1252 { data: &[255][..] }).to_string(),
+            "ÿ".to_string()
+        );
+        assert_eq!(
+            (Scalar1252 { data: &[138][..] }).to_string(),
+            "Š".to_string()
+        );
         assert_eq!(
             (Scalar1252 {
                 data: b"hello world"
@@ -383,8 +388,14 @@ mod tests {
         assert_eq!((Scalar1252::new(b"-1.50000").to_f64()), Ok(-1.5));
         assert_eq!((Scalar1252::new(b"-10000.0").to_f64()), Ok(-10000.0));
         assert_eq!((Scalar1252::new(b"10000.000").to_f64()), Ok(10000.0));
-        assert_eq!((Scalar1252::new(b"20405029.125").to_f64()), Ok(20405029.125));
-        assert_eq!((Scalar1252::new(b"-20405029.125").to_f64()), Ok(-20405029.125));
+        assert_eq!(
+            (Scalar1252::new(b"20405029.125").to_f64()),
+            Ok(20405029.125)
+        );
+        assert_eq!(
+            (Scalar1252::new(b"-20405029.125").to_f64()),
+            Ok(-20405029.125)
+        );
         assert_eq!(
             (Scalar1252::new(b"20405029553322.015").to_f64()),
             Ok(20405029553322.015)
@@ -443,7 +454,9 @@ mod tests {
         assert!(Scalar1252::new(b"999999999999999999999.999999999")
             .to_f64()
             .is_err());
-        assert!(Scalar1252::new(b"10.99999990999999999999999").to_f64().is_err());
+        assert!(Scalar1252::new(b"10.99999990999999999999999")
+            .to_f64()
+            .is_err());
         assert!(Scalar1252::new(b"10.99999999999999").to_f64().is_err());
     }
 

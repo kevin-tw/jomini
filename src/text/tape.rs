@@ -1,105 +1,6 @@
 use crate::data::{is_boundary, is_whitespace};
 use crate::util::{contains_zero_byte, le_u64, repeat_byte};
-use crate::{Error, ErrorKind, Rgb, Scalar1252, Scalar, Encoding};
-
-pub trait TextFlavor<'a>: Encoding<'a> {
-    fn parse_scalar(&self, d: &'a [u8]) -> (Self::ReturnScalar, &'a [u8]);
-    fn parse_quote_scalar(&self, d: &'a [u8]) -> Result<(Self::ReturnScalar, &'a [u8]), Error>;
-}
-
-pub struct Windows1252<'a>(std::marker::PhantomData<&'a ()>);
-
-impl<'z> Windows1252<'z> {
-    pub fn new() -> Self {
-        Windows1252(std::marker::PhantomData)
-    }
-
-    #[inline]
-    fn split_at_scalar(d: &[u8]) -> (Scalar1252, &[u8]) {
-        let start_ptr = d.as_ptr();
-        let end_ptr = unsafe { start_ptr.add(d.len()) };
-    
-        let nind = unsafe { forward_search(start_ptr, end_ptr, is_boundary) };
-        let mut ind = nind.unwrap_or_else(|| d.len());
-    
-        // To work with cases where we have "==bar" we ensure that found index is at least one
-        ind = std::cmp::max(ind, 1);
-        let (scalar, rest) = d.split_at(ind);
-        (Scalar1252::new(scalar), rest)
-    }
-
-    /// I'm not smart enough to figure out the behavior of handling escape sequences when
-    /// when scanning multi-bytes, so this fallback is for when I was to reset and
-    /// process bytewise. It is much slower, but escaped strings should be rare enough
-    /// that this shouldn't be an issue
-    fn parse_quote_scalar_fallback<'a>(&self, d: &'a [u8]) -> Result<(Scalar1252<'a>, &'a [u8]), Error> {
-        let mut pos = 1;
-        while pos < d.len() {
-            if d[pos] == b'\\' {
-                pos += 2;
-            } else if d[pos] == b'"' {
-                let scalar = Scalar1252::new(&d[1..pos]);
-                return Ok((scalar, &d[pos + 1..]));
-            } else {
-                pos += 1;
-            }
-        }
-
-        Err(Error::eof())
-    }
-
-    #[inline]
-    fn _parse_quote_scalar<'a>(&self, d: &'a [u8]) -> Result<(Scalar1252<'a>, &'a [u8]), Error> {
-        let sd = &d[1..];
-        let mut offset = 0;
-        let mut chunk_iter = sd.chunks_exact(8);
-        while let Some(n) = chunk_iter.next() {
-            let acc = le_u64(n);
-            if contains_zero_byte(acc ^ repeat_byte(b'\\')) {
-                return self.parse_quote_scalar_fallback(d);
-            } else if contains_zero_byte(acc ^ repeat_byte(b'"')) {
-                let end_idx = n.iter().position(|&x| x == b'"').unwrap_or(0) + offset;
-                let scalar = Scalar1252::new(&sd[..end_idx]);
-                return Ok((scalar, &d[end_idx + 2..]));
-            }
-
-            offset += 8;
-        }
-
-        let remainder = chunk_iter.remainder();
-        let mut pos = 0;
-        while pos < remainder.len() {
-            if remainder[pos] == b'\\' {
-                pos += 2;
-            } else if remainder[pos] == b'"' {
-                let end_idx = pos + offset;
-                let scalar = Scalar1252::new(&sd[..end_idx]);
-                return Ok((scalar, &d[end_idx + 2..]));
-            } else {
-                pos += 1;
-            }
-        }
-
-        Err(Error::eof())
-    }
-}
-
-impl<'a> Encoding<'a> for Windows1252<'a> {
-    type ReturnScalar = Scalar1252<'a>;
-    fn scalar(&self, data: &'a [u8]) -> Self::ReturnScalar {
-        Scalar1252::new(data)
-    }
-}
-
-impl<'a> TextFlavor<'a> for Windows1252<'a> {
-    fn parse_scalar(&self, d: &'a [u8]) -> (Self::ReturnScalar, &'a [u8]) {
-        Windows1252::split_at_scalar(d)
-    }
-
-    fn parse_quote_scalar(&self, d: &'a [u8]) -> Result<(Self::ReturnScalar, &'a [u8]), Error> {
-        self._parse_quote_scalar(d)
-    }
-}
+use crate::{Encoding, Error, ErrorKind, Rgb, Scalar, Windows1252};
 
 /// Represents a valid text value
 #[derive(Debug, PartialEq)]
@@ -130,7 +31,10 @@ pub struct TextTapeParser<F> {
     flavor: F,
 }
 
-impl<'a, F> TextTapeParser<F> where F: TextFlavor<'a> {
+impl<'a, F> TextTapeParser<F>
+where
+    F: Encoding<'a>,
+{
     /// Create a binary parser with a given flavor
     pub fn with_flavor(flavor: F) -> Self {
         TextTapeParser { flavor }
@@ -139,20 +43,17 @@ impl<'a, F> TextTapeParser<F> where F: TextFlavor<'a> {
     /// Parse the text format and return the data tape
     pub fn parse_slice(self, data: &'a [u8]) -> Result<TextTape<F::ReturnScalar>, Error> {
         let toks = Vec::new();
-        let mut res = TextTape {
-            token_tape: toks,
-        };
+        let mut res = TextTape { token_tape: toks };
         self.parse_slice_into_tape(data, &mut res)?;
         Ok(res)
     }
-    
 
     /// Parse the text format into the given tape.
     pub fn parse_slice_into_tape(
         self,
         data: &'a [u8],
         tape: &mut TextTape<F::ReturnScalar>,
-    )  -> Result<(), Error> {
+    ) -> Result<(), Error> {
         let token_tape = &mut tape.token_tape;
         token_tape.clear();
         token_tape.reserve(data.len() / 100 * 15);
@@ -197,7 +98,10 @@ enum ParseState {
     RgbClose,
 }
 
-impl<'a, S> TextTape<S> where S: Scalar<'a> {
+impl<'a, S> TextTape<S>
+where
+    S: Scalar<'a>,
+{
     // Creates a new text tape
     pub fn new() -> Self {
         TextTape {
@@ -234,7 +138,11 @@ impl<'a, S> TextTape<S> where S: Scalar<'a> {
     }
 }
 
-impl<'a, 'b, F, S> ParserState<'a, 'b, F, S> where F: TextFlavor<'a, ReturnScalar = S> + Encoding<'a, ReturnScalar = S> {
+impl<'a, 'b, F, S> ParserState<'a, 'b, F, S>
+where
+    F: Encoding<'a, ReturnScalar = S>,
+    S: Scalar<'a>,
+{
     fn offset(&self, data: &[u8]) -> usize {
         self.original_length - data.len()
     }
@@ -264,15 +172,87 @@ impl<'a, 'b, F, S> ParserState<'a, 'b, F, S> where F: TextFlavor<'a, ReturnScala
     }
 
     #[inline]
+    fn split_at_scalar(&self, d: &'a [u8]) -> (F::ReturnScalar, &'a [u8]) {
+        let start_ptr = d.as_ptr();
+        let end_ptr = unsafe { start_ptr.add(d.len()) };
+
+        let nind = unsafe { forward_search(start_ptr, end_ptr, is_boundary) };
+        let mut ind = nind.unwrap_or_else(|| d.len());
+
+        // To work with cases where we have "==bar" we ensure that found index is at least one
+        ind = std::cmp::max(ind, 1);
+        let (scalar, rest) = d.split_at(ind);
+        (self.flavor.scalar(scalar), rest)
+    }
+
+    /// I'm not smart enough to figure out the behavior of handling escape sequences when
+    /// when scanning multi-bytes, so this fallback is for when I was to reset and
+    /// process bytewise. It is much slower, but escaped strings should be rare enough
+    /// that this shouldn't be an issue
+    fn parse_quote_scalar_fallback(
+        &self,
+        d: &'a [u8],
+    ) -> Result<(F::ReturnScalar, &'a [u8]), Error> {
+        let mut pos = 1;
+        while pos < d.len() {
+            if d[pos] == b'\\' {
+                pos += 2;
+            } else if d[pos] == b'"' {
+                let scalar = self.flavor.scalar(&d[1..pos]);
+                return Ok((scalar, &d[pos + 1..]));
+            } else {
+                pos += 1;
+            }
+        }
+
+        Err(Error::eof())
+    }
+
+    #[inline]
+    fn _parse_quote_scalar(&self, d: &'a [u8]) -> Result<(F::ReturnScalar, &'a [u8]), Error> {
+        let sd = &d[1..];
+        let mut offset = 0;
+        let mut chunk_iter = sd.chunks_exact(8);
+        while let Some(n) = chunk_iter.next() {
+            let acc = le_u64(n);
+            if contains_zero_byte(acc ^ repeat_byte(b'\\')) {
+                return self.parse_quote_scalar_fallback(d);
+            } else if contains_zero_byte(acc ^ repeat_byte(b'"')) {
+                let end_idx = n.iter().position(|&x| x == b'"').unwrap_or(0) + offset;
+                let scalar = self.flavor.scalar(&sd[..end_idx]);
+                return Ok((scalar, &d[end_idx + 2..]));
+            }
+
+            offset += 8;
+        }
+
+        let remainder = chunk_iter.remainder();
+        let mut pos = 0;
+        while pos < remainder.len() {
+            if remainder[pos] == b'\\' {
+                pos += 2;
+            } else if remainder[pos] == b'"' {
+                let end_idx = pos + offset;
+                let scalar = self.flavor.scalar(&sd[..end_idx]);
+                return Ok((scalar, &d[end_idx + 2..]));
+            } else {
+                pos += 1;
+            }
+        }
+
+        Err(Error::eof())
+    }
+
+    #[inline]
     fn parse_quote_scalar(&mut self, d: &'a [u8]) -> Result<&'a [u8], Error> {
-        let (scalar, data) = self.flavor.parse_quote_scalar(d)?;
+        let (scalar, data) = self._parse_quote_scalar(d)?;
         self.token_tape.push(TextToken::Scalar(scalar));
         Ok(data)
     }
 
     #[inline]
     fn parse_scalar(&mut self, d: &'a [u8]) -> &'a [u8] {
-        let (scalar, rest) = self.flavor.parse_scalar(d);
+        let (scalar, rest) = self.split_at_scalar(d);
         self.token_tape.push(TextToken::Scalar(scalar));
         rest
     }
@@ -568,7 +548,7 @@ impl<'a, 'b, F, S> ParserState<'a, 'b, F, S> where F: TextFlavor<'a, ReturnScala
                     }
                 },
                 ParseState::RgbR => {
-                    let (r, rest) = Windows1252::split_at_scalar(data);
+                    let (r, rest) = self.split_at_scalar(data);
                     if let Ok(x) = r.to_u64() {
                         red = x as u32;
                     } else {
@@ -582,7 +562,7 @@ impl<'a, 'b, F, S> ParserState<'a, 'b, F, S> where F: TextFlavor<'a, ReturnScala
                     data = rest;
                 }
                 ParseState::RgbG => {
-                    let (r, rest) = Windows1252::split_at_scalar(data);
+                    let (r, rest) = self.split_at_scalar(data);
                     if let Ok(x) = r.to_u64() {
                         green = x as u32;
                     } else {
@@ -596,7 +576,7 @@ impl<'a, 'b, F, S> ParserState<'a, 'b, F, S> where F: TextFlavor<'a, ReturnScala
                     data = rest;
                 }
                 ParseState::RgbB => {
-                    let (r, rest) = Windows1252::split_at_scalar(data);
+                    let (r, rest) = self.split_at_scalar(data);
                     if let Ok(x) = r.to_u64() {
                         blue = x as u32;
                     } else {
@@ -677,7 +657,9 @@ mod tests {
     #[test]
     fn test_error_offset() {
         let data = b"foo={}} a=c";
-        let err = text_parser_windows1252().parse_slice(&data[..]).unwrap_err();
+        let err = text_parser_windows1252()
+            .parse_slice(&data[..])
+            .unwrap_err();
         match err.kind() {
             ErrorKind::StackEmpty { offset, .. } => {
                 assert_eq!(*offset, 6);

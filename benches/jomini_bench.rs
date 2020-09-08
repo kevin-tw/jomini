@@ -1,5 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use jomini::{BinaryDeserializer, BinaryTape, Scalar1252, Scalar, TextDeserializer, TextTape, BinaryParser};
+use jomini::{
+    BinaryDeserializer, BinaryParser, BinaryTape, Scalar, Scalar1252, TextDeserializer, TextTape,
+};
 use std::collections::HashMap;
 
 const METADATA_BIN: &'static [u8] = include_bytes!("../tests/fixtures/meta.bin");

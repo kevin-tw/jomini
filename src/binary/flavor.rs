@@ -13,6 +13,12 @@ pub trait BinaryFlavor<'a>: Sized + Encoding<'a> {
 #[derive(Debug)]
 pub struct DefaultFlavor<'a>(std::marker::PhantomData<&'a ()>);
 
+impl<'a> Default for DefaultFlavor<'a> {
+    fn default() -> Self {
+        DefaultFlavor::new()
+    }
+}
+
 impl<'a> DefaultFlavor<'a> {
     pub fn new() -> Self {
         DefaultFlavor(std::marker::PhantomData)

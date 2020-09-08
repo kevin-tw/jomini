@@ -1,7 +1,7 @@
 use crate::{
-    de::ColorSequence, BinaryFlavor, BinaryTape, BinaryToken, DefaultFlavor, DeserializeError,
-    DeserializeErrorKind, Error, FailedResolveStrategy, TokenResolver, Scalar,
-BinaryParser};
+    de::ColorSequence, BinaryFlavor, BinaryParser, BinaryTape, BinaryToken, DefaultFlavor,
+    DeserializeError, DeserializeErrorKind, Error, FailedResolveStrategy, Scalar, TokenResolver,
+};
 use serde::de::{self, Deserialize, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use std::borrow::Cow;
 
@@ -100,7 +100,7 @@ impl BinaryDeserializer {
     where
         T: Deserialize<'de>,
         RES: TokenResolver,
-        S: Scalar<'de>
+        S: Scalar<'de>,
     {
         BinaryDeserializer::builder()
             .on_failed_resolve(FailedResolveStrategy::Ignore)
@@ -218,7 +218,8 @@ struct RootDeserializer<'b, 'res: 'b, RES, S> {
 
 impl<'b, 'de, 'r, 'res: 'de, RES: TokenResolver, S> de::Deserializer<'de>
     for &'r mut RootDeserializer<'b, 'res, RES, S>
-    where S: Scalar<'de>
+where
+    S: Scalar<'de>,
 {
     type Error = DeserializeError;
 
@@ -291,7 +292,8 @@ impl<'c, 'a, 'res: 'a, RES, S> BinaryMap<'c, 'a, 'res, RES, S> {
 
 impl<'c, 'de, 'a, 'res: 'de, RES: TokenResolver, S> MapAccess<'de>
     for BinaryMap<'c, 'a, 'res, RES, S>
-    where S: Scalar<'de>
+where
+    S: Scalar<'de>,
 {
     type Error = DeserializeError;
 
@@ -339,7 +341,15 @@ struct KeyDeserializer<'b, 'res: 'b, RES, S> {
     tape_idx: usize,
 }
 
-fn visit_key<'c, 'b: 'c, 'de: 'b, 'res: 'de, RES: TokenResolver, V: Visitor<'de>, S: Scalar<'de>>(
+fn visit_key<
+    'c,
+    'b: 'c,
+    'de: 'b,
+    'res: 'de,
+    RES: TokenResolver,
+    V: Visitor<'de>,
+    S: Scalar<'de>,
+>(
     tape_idx: usize,
     tokens: &'b [BinaryToken<S>],
     config: &'b BinaryConfig<'res, RES>,
@@ -377,7 +387,7 @@ fn visit_key<'c, 'b: 'c, 'de: 'b, 'res: 'de, RES: TokenResolver, V: Visitor<'de>
     }
 }
 
-impl<'b, 'de, 'res: 'de, RES: TokenResolver, S:Scalar<'de>> de::Deserializer<'de>
+impl<'b, 'de, 'res: 'de, RES: TokenResolver, S: Scalar<'de>> de::Deserializer<'de>
     for KeyDeserializer<'b, 'res, RES, S>
 {
     type Error = DeserializeError;
@@ -587,7 +597,9 @@ impl<'b, 'de, 'r, 'res: 'de, RES: TokenResolver, S: Scalar<'de>> de::Deserialize
     }
 }
 
-impl<'b, 'de, 'res: 'de, RES: TokenResolver, S: Scalar<'de>> SeqAccess<'de> for BinarySequence<'b, 'res, RES, S> {
+impl<'b, 'de, 'res: 'de, RES: TokenResolver, S: Scalar<'de>> SeqAccess<'de>
+    for BinarySequence<'b, 'res, RES, S>
+{
     type Error = DeserializeError;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>

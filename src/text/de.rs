@@ -1,5 +1,6 @@
 use crate::{
-    de::ColorSequence, DeserializeError, DeserializeErrorKind, Error, TextTape, TextToken, Scalar, text_parser_windows1252,
+    de::ColorSequence, text_parser_windows1252, DeserializeError, DeserializeErrorKind, Error,
+    Scalar, TextTape, TextToken,
 };
 use serde::de::{self, Deserialize, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use std::borrow::Cow;
@@ -67,7 +68,7 @@ impl TextDeserializer {
     pub fn from_tape<'b, 'a: 'b, T, S>(tape: &'b TextTape<S>) -> Result<T, Error>
     where
         T: Deserialize<'a>,
-        S: Scalar<'a>
+        S: Scalar<'a>,
     {
         let mut root = RootDeserializer {
             tokens: tape.tokens(),
@@ -81,7 +82,10 @@ pub struct RootDeserializer<'b, S> {
     tokens: &'b [TextToken<S>],
 }
 
-impl<'b, 'de, 'r, S> de::Deserializer<'de> for &'r mut RootDeserializer<'b, S> where S: Scalar<'de> {
+impl<'b, 'de, 'r, S> de::Deserializer<'de> for &'r mut RootDeserializer<'b, S>
+where
+    S: Scalar<'de>,
+{
     type Error = DeserializeError;
 
     fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
@@ -139,7 +143,10 @@ impl<'a, 'de, S> BinaryMap<'a, S> {
     }
 }
 
-impl<'de, 'a, S> MapAccess<'de> for BinaryMap<'a, S> where S: Scalar<'de> {
+impl<'de, 'a, S> MapAccess<'de> for BinaryMap<'a, S>
+where
+    S: Scalar<'de>,
+{
     type Error = DeserializeError;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
@@ -179,7 +186,10 @@ impl<'de, 'a, S> MapAccess<'de> for BinaryMap<'a, S> where S: Scalar<'de> {
     }
 }
 
-fn ensure_scalar<'a, S>(s: &TextToken<S>) -> Result<impl Scalar<'a>, DeserializeError> where S: Scalar<'a> {
+fn ensure_scalar<'a, S>(s: &TextToken<S>) -> Result<impl Scalar<'a>, DeserializeError>
+where
+    S: Scalar<'a>,
+{
     match s {
         TextToken::Scalar(s) => Ok(*s),
         x => Err(DeserializeError {
@@ -193,13 +203,16 @@ struct KeyDeserializer<'b, S> {
     tape_idx: usize,
 }
 
-impl<'b, 'de, S> KeyDeserializer<'b, S>{
+impl<'b, 'de, S> KeyDeserializer<'b, S> {
     fn new(tokens: &'b [TextToken<S>], tape_idx: usize) -> Self {
         KeyDeserializer { tokens, tape_idx }
     }
 }
 
-impl<'b, 'de, S> de::Deserializer<'de> for KeyDeserializer<'b, S>  where S: Scalar<'de>  {
+impl<'b, 'de, S> de::Deserializer<'de> for KeyDeserializer<'b, S>
+where
+    S: Scalar<'de>,
+{
     type Error = DeserializeError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -469,7 +482,10 @@ struct ValueDeserializer<'b, S> {
     tokens: &'b [TextToken<S>],
 }
 
-impl<'b, 'de, S> de::Deserializer<'de> for ValueDeserializer<'b, S> where S: Scalar<'de> {
+impl<'b, 'de, S> de::Deserializer<'de> for ValueDeserializer<'b, S>
+where
+    S: Scalar<'de>,
+{
     type Error = DeserializeError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -701,7 +717,10 @@ struct BinarySequence<'b, S> {
     end_idx: usize,
 }
 
-impl<'b, 'de, 'r, S> de::Deserializer<'de> for &'r mut BinarySequence<'b, S> where S: Scalar<'de> {
+impl<'b, 'de, 'r, S> de::Deserializer<'de> for &'r mut BinarySequence<'b, S>
+where
+    S: Scalar<'de>,
+{
     type Error = DeserializeError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -828,7 +847,10 @@ impl<'b, 'de, 'r, S> de::Deserializer<'de> for &'r mut BinarySequence<'b, S> whe
     }
 }
 
-impl<'b, 'de, S> SeqAccess<'de> for BinarySequence<'b, S> where S: Scalar<'de> {
+impl<'b, 'de, S> SeqAccess<'de> for BinarySequence<'b, S>
+where
+    S: Scalar<'de>,
+{
     type Error = DeserializeError;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>

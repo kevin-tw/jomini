@@ -1,4 +1,7 @@
-use crate::{util::{le_i32, le_u16, le_u32, le_u64}, Scalar};
+use crate::{
+    util::{le_i32, le_u16, le_u32, le_u64},
+    Scalar,
+};
 use crate::{BinaryFlavor, DefaultFlavor, Error, ErrorKind, Rgb, Scalar1252};
 
 pub struct BinaryParser;
@@ -84,9 +87,7 @@ where
     /// Parse the binary format according to the parser's flavor and return the data tape
     pub fn parse_slice(self, data: &'a [u8]) -> Result<BinaryTape<F::ReturnScalar>, Error> {
         let toks = Vec::new();
-        let mut res = BinaryTape {
-            token_tape: toks,
-        };
+        let mut res = BinaryTape { token_tape: toks };
         self.parse_slice_into_tape(data, &mut res)?;
         Ok(res)
     }
@@ -130,6 +131,7 @@ enum ParseState {
 impl<'a, 'b, F, S> ParserState<'a, 'b, F, S>
 where
     F: BinaryFlavor<'a, ReturnScalar = S>,
+    S: Scalar<'a>,
 {
     fn offset(&self, data: &[u8]) -> usize {
         self.original_length - data.len()
@@ -704,7 +706,10 @@ pub struct BinaryTape<S> {
     token_tape: Vec<BinaryToken<S>>,
 }
 
-impl<'a, S> BinaryTape<S> where S: Scalar<'a> {
+impl<'a, S> BinaryTape<S>
+where
+    S: Scalar<'a>,
+{
     /// Creates an empty tape
     pub fn new() -> Self {
         BinaryTape {
