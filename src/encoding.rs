@@ -5,21 +5,22 @@ pub trait Encoding<'a> {
     fn scalar(&self, data: &'a [u8]) -> Self::ReturnScalar;
 }
 
-pub struct Windows1252<'a>(std::marker::PhantomData<&'a ()>);
+#[derive(Debug)]
+pub struct Windows1252;
 
-impl<'a> Default for Windows1252<'a> {
+impl Default for Windows1252 {
     fn default() -> Self {
         Windows1252::new()
     }
 }
 
-impl<'a> Windows1252<'a> {
+impl Windows1252 {
     pub fn new() -> Self {
-        Windows1252(std::marker::PhantomData)
+        Windows1252
     }
 }
 
-impl<'a> Encoding<'a> for Windows1252<'a> {
+impl<'a> Encoding<'a> for Windows1252 {
     type ReturnScalar = Scalar1252<'a>;
     fn scalar(&self, data: &'a [u8]) -> Self::ReturnScalar {
         Scalar1252::new(data)

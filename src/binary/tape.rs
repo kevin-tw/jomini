@@ -7,11 +7,11 @@ use crate::{BinaryFlavor, DefaultFlavor, Error, ErrorKind, Rgb, Scalar1252};
 pub struct BinaryParser;
 
 impl BinaryParser {
-    pub fn from_windows1252_slice(data: &[u8]) -> Result<BinaryTape<Scalar1252>, Error> {
+    pub fn from_windows1252_slice<'a>(data: &'a [u8]) -> Result<BinaryTape<Scalar1252<'a>>, Error> {
         BinaryTapeParser::with_flavor(DefaultFlavor::new()).parse_slice(data)
     }
 
-    pub fn windows_1252_parser() -> BinaryTapeParser<DefaultFlavor<'static>> {
+    pub fn windows_1252_parser() -> BinaryTapeParser<DefaultFlavor> {
         BinaryTapeParser::with_flavor(DefaultFlavor::new())
     }
 }

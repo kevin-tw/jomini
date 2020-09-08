@@ -64,7 +64,7 @@ pub struct BinaryDeserializer;
 
 impl BinaryDeserializer {
     /// Create a builder to custom binary deserialization
-    pub fn builder() -> BinaryDeserializerBuilder<DefaultFlavor<'static>> {
+    pub fn builder() -> BinaryDeserializerBuilder<DefaultFlavor> {
         BinaryDeserializerBuilder::with_flavor(DefaultFlavor::new())
     }
 

@@ -21,7 +21,7 @@ pub enum TextToken<S> {
     Rgb(Box<Rgb>),
 }
 
-pub fn text_parser_windows1252() -> TextTapeParser<Windows1252<'static>> {
+pub fn text_parser_windows1252() -> TextTapeParser<Windows1252> {
     TextTapeParser::with_flavor(Windows1252::new())
 }
 

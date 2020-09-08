@@ -1,4 +1,4 @@
-use crate::{util::le_i32, Encoding, Scalar1252};
+use crate::{util::le_i32, Encoding, Scalar1252, Windows1252};
 
 /// Trait customizing decoding values from binary data
 pub trait BinaryFlavor<'a>: Sized + Encoding<'a> {
@@ -11,29 +11,29 @@ pub trait BinaryFlavor<'a>: Sized + Encoding<'a> {
 
 /// The default binary flavor
 #[derive(Debug)]
-pub struct DefaultFlavor<'a>(std::marker::PhantomData<&'a ()>);
+pub struct DefaultFlavor(Windows1252);
 
-impl<'a> Default for DefaultFlavor<'a> {
+impl Default for DefaultFlavor {
     fn default() -> Self {
         DefaultFlavor::new()
     }
 }
 
-impl<'a> DefaultFlavor<'a> {
+impl DefaultFlavor {
     pub fn new() -> Self {
-        DefaultFlavor(std::marker::PhantomData)
+        DefaultFlavor(Windows1252::new())
     }
 }
 
-impl<'a> Encoding<'a> for DefaultFlavor<'a> {
+impl<'a> Encoding<'a> for DefaultFlavor {
     type ReturnScalar = Scalar1252<'a>;
 
     fn scalar(&self, data: &'a [u8]) -> Self::ReturnScalar {
-        Scalar1252::new(data)
+        self.0.scalar(data)
     }
 }
 
-impl<'a> BinaryFlavor<'a> for DefaultFlavor<'a> {
+impl<'a> BinaryFlavor<'a> for DefaultFlavor {
     fn visit_f32_1(&self, data: &[u8]) -> f32 {
         // First encoding is an i32 that has a fixed point offset of 3 decimal digits
         (le_i32(data) as f32) / 1000.0
