@@ -1,6 +1,36 @@
-use crate::data::{is_boundary, is_whitespace};
 use crate::util::{contains_zero_byte, le_u64, repeat_byte};
-use crate::{Encoding, Error, ErrorKind, Rgb, Scalar, Windows1252};
+use crate::{
+    data::{is_boundary, is_whitespace},
+    Encoding, Scalar1252, ScalarUtf8, Utf8, Windows1252,
+};
+use crate::{Error, ErrorKind, Rgb, Scalar};
+
+pub struct TextParser;
+
+impl TextParser {
+    pub fn from_encoding<'a, E>(encoding: E) -> TextTapeParser<E>
+    where
+        E: Encoding<'a>,
+    {
+        TextTapeParser::with_flavor(encoding)
+    }
+
+    pub fn utf8_parser() -> TextTapeParser<Utf8> {
+        TextTapeParser::with_flavor(Utf8::new())
+    }
+
+    pub fn from_utf8(data: &[u8]) -> Result<TextTape<ScalarUtf8>, Error> {
+        Self::utf8_parser().parse_slice(data)
+    }
+
+    pub fn windows1252_parser() -> TextTapeParser<Windows1252> {
+        TextTapeParser::with_flavor(Windows1252::new())
+    }
+
+    pub fn from_windows1252(data: &[u8]) -> Result<TextTape<Scalar1252>, Error> {
+        Self::windows1252_parser().parse_slice(data)
+    }
+}
 
 /// Represents a valid text value
 #[derive(Debug, PartialEq)]
@@ -19,10 +49,6 @@ pub enum TextToken<S> {
 
     /// Represents a text encoded rgb value
     Rgb(Box<Rgb>),
-}
-
-pub fn text_parser_windows1252() -> TextTapeParser<Windows1252> {
-    TextTapeParser::with_flavor(Windows1252::new())
 }
 
 /// Creates a parser that a writes to a text tape
@@ -636,9 +662,10 @@ unsafe fn forward_search<F: Fn(u8) -> bool>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Scalar1252;
 
     fn parse<'a>(data: &'a [u8]) -> Result<TextTape<Scalar1252<'a>>, Error> {
-        text_parser_windows1252().parse_slice(data)
+        TextParser::from_windows1252(data)
     }
 
     #[test]
@@ -657,9 +684,7 @@ mod tests {
     #[test]
     fn test_error_offset() {
         let data = b"foo={}} a=c";
-        let err = text_parser_windows1252()
-            .parse_slice(&data[..])
-            .unwrap_err();
+        let err = TextParser::from_windows1252(data).unwrap_err();
         match err.kind() {
             ErrorKind::StackEmpty { offset, .. } => {
                 assert_eq!(*offset, 6);
@@ -788,7 +813,8 @@ mod tests {
         let mut tape = TextTape::new();
 
         let data = b"foo={bar=1 qux=28}";
-        text_parser_windows1252()
+
+        TextParser::windows1252_parser()
             .parse_slice_into_tape(data, &mut tape)
             .unwrap();
 
@@ -806,7 +832,7 @@ mod tests {
         );
 
         let data2 = b"foo2={bar2=3 qux2=29}";
-        text_parser_windows1252()
+        TextParser::windows1252_parser()
             .parse_slice_into_tape(data2, &mut tape)
             .unwrap();
 

@@ -1,6 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use jomini::{
-    BinaryDeserializer, BinaryParser, BinaryTape, Scalar, Scalar1252, TextDeserializer, TextTape,
+    BinaryDeserializer, BinaryParser, BinaryTape, Scalar, Scalar1252, TextDeserializer, TextParser,
+    TextTape,
 };
 use std::collections::HashMap;
 
@@ -124,7 +125,7 @@ pub fn text_parse_benchmark(c: &mut Criterion) {
     group.bench_function("text", |b| {
         let mut tape = TextTape::new();
         b.iter(|| {
-            jomini::text_parser_windows1252()
+            TextParser::windows1252_parser()
                 .parse_slice_into_tape(&data[..], &mut tape)
                 .unwrap();
         })

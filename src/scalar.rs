@@ -66,6 +66,13 @@ pub struct ScalarUtf8<'a> {
     data: &'a [u8],
 }
 
+impl<'a> ScalarUtf8<'a> {
+    /// Create a new scalar backed by windows-1252 encoded byte slice
+    pub fn new(data: &'a [u8]) -> Self {
+        ScalarUtf8 { data }
+    }
+}
+
 impl<'a> Scalar<'a> for ScalarUtf8<'a> {
     fn view_data(&self) -> &'a [u8] {
         self.data
@@ -113,7 +120,7 @@ pub struct Scalar1252<'a> {
 
 impl<'a> Scalar1252<'a> {
     /// Create a new scalar backed by windows-1252 encoded byte slice
-    pub fn new(data: &'a [u8]) -> Scalar1252<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
         Scalar1252 { data }
     }
 }

@@ -1,6 +1,6 @@
 use crate::{
-    de::ColorSequence, text_parser_windows1252, DeserializeError, DeserializeErrorKind, Error,
-    Scalar, TextTape, TextToken,
+    de::ColorSequence, DeserializeError, DeserializeErrorKind, Error, Scalar, TextParser, TextTape,
+    TextToken,
 };
 use serde::de::{self, Deserialize, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use std::borrow::Cow;
@@ -60,7 +60,7 @@ impl TextDeserializer {
     where
         T: Deserialize<'a>,
     {
-        let tape = text_parser_windows1252().parse_slice(data)?;
+        let tape = TextParser::from_windows1252(data)?;
         Ok(TextDeserializer::from_tape(&tape)?)
     }
 
