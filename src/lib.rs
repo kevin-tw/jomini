@@ -136,13 +136,15 @@ pub(crate) mod de;
 mod errors;
 mod scalar;
 mod text;
+mod encoding;
 pub(crate) mod util;
 
 pub use self::binary::*;
 pub use self::data::Rgb;
 pub use self::errors::*;
-pub use self::scalar::{Scalar, ScalarError};
+pub use self::scalar::{Scalar1252, ScalarError, Scalar, ScalarUtf8};
 pub use self::text::*;
+pub use self::encoding::*;
 
 #[cfg(feature = "derive")]
 pub use jomini_derive::*;

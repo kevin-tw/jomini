@@ -1,10 +1,109 @@
 use crate::data::{is_boundary, is_whitespace};
 use crate::util::{contains_zero_byte, le_u64, repeat_byte};
-use crate::{Error, ErrorKind, Rgb, Scalar};
+use crate::{Error, ErrorKind, Rgb, Scalar1252, Scalar, Encoding};
+
+pub trait TextFlavor<'a>: Encoding<'a> {
+    fn parse_scalar(&self, d: &'a [u8]) -> (Self::ReturnScalar, &'a [u8]);
+    fn parse_quote_scalar(&self, d: &'a [u8]) -> Result<(Self::ReturnScalar, &'a [u8]), Error>;
+}
+
+pub struct Windows1252<'a>(std::marker::PhantomData<&'a ()>);
+
+impl<'z> Windows1252<'z> {
+    pub fn new() -> Self {
+        Windows1252(std::marker::PhantomData)
+    }
+
+    #[inline]
+    fn split_at_scalar(d: &[u8]) -> (Scalar1252, &[u8]) {
+        let start_ptr = d.as_ptr();
+        let end_ptr = unsafe { start_ptr.add(d.len()) };
+    
+        let nind = unsafe { forward_search(start_ptr, end_ptr, is_boundary) };
+        let mut ind = nind.unwrap_or_else(|| d.len());
+    
+        // To work with cases where we have "==bar" we ensure that found index is at least one
+        ind = std::cmp::max(ind, 1);
+        let (scalar, rest) = d.split_at(ind);
+        (Scalar1252::new(scalar), rest)
+    }
+
+    /// I'm not smart enough to figure out the behavior of handling escape sequences when
+    /// when scanning multi-bytes, so this fallback is for when I was to reset and
+    /// process bytewise. It is much slower, but escaped strings should be rare enough
+    /// that this shouldn't be an issue
+    fn parse_quote_scalar_fallback<'a>(&self, d: &'a [u8]) -> Result<(Scalar1252<'a>, &'a [u8]), Error> {
+        let mut pos = 1;
+        while pos < d.len() {
+            if d[pos] == b'\\' {
+                pos += 2;
+            } else if d[pos] == b'"' {
+                let scalar = Scalar1252::new(&d[1..pos]);
+                return Ok((scalar, &d[pos + 1..]));
+            } else {
+                pos += 1;
+            }
+        }
+
+        Err(Error::eof())
+    }
+
+    #[inline]
+    fn _parse_quote_scalar<'a>(&self, d: &'a [u8]) -> Result<(Scalar1252<'a>, &'a [u8]), Error> {
+        let sd = &d[1..];
+        let mut offset = 0;
+        let mut chunk_iter = sd.chunks_exact(8);
+        while let Some(n) = chunk_iter.next() {
+            let acc = le_u64(n);
+            if contains_zero_byte(acc ^ repeat_byte(b'\\')) {
+                return self.parse_quote_scalar_fallback(d);
+            } else if contains_zero_byte(acc ^ repeat_byte(b'"')) {
+                let end_idx = n.iter().position(|&x| x == b'"').unwrap_or(0) + offset;
+                let scalar = Scalar1252::new(&sd[..end_idx]);
+                return Ok((scalar, &d[end_idx + 2..]));
+            }
+
+            offset += 8;
+        }
+
+        let remainder = chunk_iter.remainder();
+        let mut pos = 0;
+        while pos < remainder.len() {
+            if remainder[pos] == b'\\' {
+                pos += 2;
+            } else if remainder[pos] == b'"' {
+                let end_idx = pos + offset;
+                let scalar = Scalar1252::new(&sd[..end_idx]);
+                return Ok((scalar, &d[end_idx + 2..]));
+            } else {
+                pos += 1;
+            }
+        }
+
+        Err(Error::eof())
+    }
+}
+
+impl<'a> Encoding<'a> for Windows1252<'a> {
+    type ReturnScalar = Scalar1252<'a>;
+    fn scalar(&self, data: &'a [u8]) -> Self::ReturnScalar {
+        Scalar1252::new(data)
+    }
+}
+
+impl<'a> TextFlavor<'a> for Windows1252<'a> {
+    fn parse_scalar(&self, d: &'a [u8]) -> (Self::ReturnScalar, &'a [u8]) {
+        Windows1252::split_at_scalar(d)
+    }
+
+    fn parse_quote_scalar(&self, d: &'a [u8]) -> Result<(Self::ReturnScalar, &'a [u8]), Error> {
+        self._parse_quote_scalar(d)
+    }
+}
 
 /// Represents a valid text value
 #[derive(Debug, PartialEq)]
-pub enum TextToken<'a> {
+pub enum TextToken<S> {
     /// Index of the `TextToken::End` that signifies this array's termination
     Array(usize),
 
@@ -12,7 +111,7 @@ pub enum TextToken<'a> {
     Object(usize),
 
     /// Extracted scalar value
-    Scalar(Scalar<'a>),
+    Scalar(S),
 
     /// Index of the start of this object
     End(usize),
@@ -21,29 +120,39 @@ pub enum TextToken<'a> {
     Rgb(Box<Rgb>),
 }
 
+pub fn text_parser_windows1252() -> TextTapeParser<Windows1252<'static>> {
+    TextTapeParser::with_flavor(Windows1252::new())
+}
+
 /// Creates a parser that a writes to a text tape
 #[derive(Debug, Default)]
-pub struct TextTapeParser;
+pub struct TextTapeParser<F> {
+    flavor: F,
+}
 
-impl TextTapeParser {
-    /// Create a text parser
-    pub fn new() -> Self {
-        TextTapeParser::default()
+impl<'a, F> TextTapeParser<F> where F: TextFlavor<'a> {
+    /// Create a binary parser with a given flavor
+    pub fn with_flavor(flavor: F) -> Self {
+        TextTapeParser { flavor }
     }
 
     /// Parse the text format and return the data tape
-    pub fn parse_slice(self, data: &[u8]) -> Result<TextTape, Error> {
-        let mut res = TextTape::default();
+    pub fn parse_slice(self, data: &'a [u8]) -> Result<TextTape<F::ReturnScalar>, Error> {
+        let toks = Vec::new();
+        let mut res = TextTape {
+            token_tape: toks,
+        };
         self.parse_slice_into_tape(data, &mut res)?;
         Ok(res)
     }
+    
 
     /// Parse the text format into the given tape.
-    pub fn parse_slice_into_tape<'a>(
+    pub fn parse_slice_into_tape(
         self,
         data: &'a [u8],
-        tape: &mut TextTape<'a>,
-    ) -> Result<(), Error> {
+        tape: &mut TextTape<F::ReturnScalar>,
+    )  -> Result<(), Error> {
         let token_tape = &mut tape.token_tape;
         token_tape.clear();
         token_tape.reserve(data.len() / 100 * 15);
@@ -51,6 +160,7 @@ impl TextTapeParser {
             data,
             original_length: data.len(),
             token_tape,
+            flavor: self.flavor,
         };
 
         state.parse()?;
@@ -58,17 +168,17 @@ impl TextTapeParser {
     }
 }
 
-struct ParserState<'a, 'b> {
+struct ParserState<'a, 'b, F, S> {
     data: &'a [u8],
     original_length: usize,
-    token_tape: &'b mut Vec<TextToken<'a>>,
+    flavor: F,
+    token_tape: &'b mut Vec<TextToken<S>>,
 }
 
 /// Houses the tape of tokens that is extracted from plaintext data
 #[derive(Debug, Default)]
-pub struct TextTape<'a> {
-    token_tape: Vec<TextToken<'a>>,
-    original_length: usize,
+pub struct TextTape<S> {
+    token_tape: Vec<TextToken<S>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -87,29 +197,44 @@ enum ParseState {
     RgbClose,
 }
 
-impl<'a> TextTape<'a> {
-    /// Creates a new text tape
+impl<'a, S> TextTape<S> where S: Scalar<'a> {
+    // Creates a new text tape
     pub fn new() -> Self {
-        Default::default()
+        TextTape {
+            token_tape: Vec::new(),
+        }
     }
 
-    /// Convenience method for creating a text parser and parsing the given input
-    pub fn from_slice(data: &[u8]) -> Result<TextTape<'_>, Error> {
-        TextTapeParser.parse_slice(data)
-    }
+    // /// Convenience method for creating a text parser and parsing the given input
+    // pub fn from_slice(data: &[u8]) -> Result<TextTape<'_>, Error> {
+    //     TextTapeParser.parse_slice(data)
+    // }
 
-    /// Returns a parser for text data
-    pub fn parser() -> TextTapeParser {
-        TextTapeParser
-    }
+    // /// Returns a parser for text data
+    // pub fn parser() -> TextTapeParser {
+    //     TextTapeParser
+    // }
+
+    /// Returns a parser for the default flavor of binary data
+    // pub fn parser1252<'b>() -> TextTapeParser<Windows1252<'b>> {
+    //     TextTape::parser_flavor(Windows1252::new())
+    // }
+
+    /// Returns a parser for a given flavor of binary data
+    // pub fn parser_flavor<F>(flavor: F) -> TextTapeParser<F>
+    // where
+    //     F: TextFlavor<'a>,
+    // {
+    //     TextTapeParser::with_flavor(flavor)
+    // }
 
     /// Return the parsed tokens
-    pub fn tokens(&self) -> &[TextToken<'a>] {
+    pub fn tokens(&self) -> &[TextToken<S>] {
         self.token_tape.as_slice()
     }
 }
 
-impl<'a, 'b> ParserState<'a, 'b> {
+impl<'a, 'b, F, S> ParserState<'a, 'b, F, S> where F: TextFlavor<'a, ReturnScalar = S> + Encoding<'a, ReturnScalar = S> {
     fn offset(&self, data: &[u8]) -> usize {
         self.original_length - data.len()
     }
@@ -138,81 +263,16 @@ impl<'a, 'b> ParserState<'a, 'b> {
         }
     }
 
-    /// I'm not smart enough to figure out the behavior of handling escape sequences when
-    /// when scanning multi-bytes, so this fallback is for when I was to reset and
-    /// process bytewise. It is much slower, but escaped strings should be rare enough
-    /// that this shouldn't be an issue
-    fn parse_quote_scalar_fallback(&mut self, d: &'a [u8]) -> Result<&'a [u8], Error> {
-        let mut pos = 1;
-        while pos < d.len() {
-            if d[pos] == b'\\' {
-                pos += 2;
-            } else if d[pos] == b'"' {
-                let scalar = Scalar::new(&d[1..pos]);
-                self.token_tape.push(TextToken::Scalar(scalar));
-                return Ok(&d[pos + 1..]);
-            } else {
-                pos += 1;
-            }
-        }
-
-        Err(Error::eof())
-    }
-
     #[inline]
     fn parse_quote_scalar(&mut self, d: &'a [u8]) -> Result<&'a [u8], Error> {
-        let sd = &d[1..];
-        let mut offset = 0;
-        let mut chunk_iter = sd.chunks_exact(8);
-        while let Some(n) = chunk_iter.next() {
-            let acc = le_u64(n);
-            if contains_zero_byte(acc ^ repeat_byte(b'\\')) {
-                return self.parse_quote_scalar_fallback(d);
-            } else if contains_zero_byte(acc ^ repeat_byte(b'"')) {
-                let end_idx = n.iter().position(|&x| x == b'"').unwrap_or(0) + offset;
-                let scalar = Scalar::new(&sd[..end_idx]);
-                self.token_tape.push(TextToken::Scalar(scalar));
-                return Ok(&d[end_idx + 2..]);
-            }
-
-            offset += 8;
-        }
-
-        let remainder = chunk_iter.remainder();
-        let mut pos = 0;
-        while pos < remainder.len() {
-            if remainder[pos] == b'\\' {
-                pos += 2;
-            } else if remainder[pos] == b'"' {
-                let end_idx = pos + offset;
-                let scalar = Scalar::new(&sd[..end_idx]);
-                self.token_tape.push(TextToken::Scalar(scalar));
-                return Ok(&d[end_idx + 2..]);
-            } else {
-                pos += 1;
-            }
-        }
-
-        Err(Error::eof())
-    }
-
-    #[inline]
-    fn split_at_scalar(d: &[u8]) -> (Scalar, &[u8]) {
-        let start_ptr = d.as_ptr();
-        let end_ptr = unsafe { start_ptr.add(d.len()) };
-
-        let nind = unsafe { forward_search(start_ptr, end_ptr, is_boundary) };
-        let mut ind = nind.unwrap_or_else(|| d.len());
-
-        // To work with cases where we have "==bar" we ensure that found index is at least one
-        ind = std::cmp::max(ind, 1);
-        let (scalar, rest) = d.split_at(ind);
-        (Scalar::new(scalar), rest)
+        let (scalar, data) = self.flavor.parse_quote_scalar(d)?;
+        self.token_tape.push(TextToken::Scalar(scalar));
+        Ok(data)
     }
 
     #[inline]
     fn parse_scalar(&mut self, d: &'a [u8]) -> &'a [u8] {
-        let (scalar, rest) = ParserState::split_at_scalar(d);
+        let (scalar, rest) = self.flavor.parse_scalar(d);
         self.token_tape.push(TextToken::Scalar(scalar));
         rest
     }
@@ -267,7 +327,7 @@ impl<'a, 'b> ParserState<'a, 'b> {
             if data.is_empty() {
                 if state == ParseState::RgbOpen {
                     state = ParseState::Key;
-                    let scalar = Scalar::new(b"rgb");
+                    let scalar = self.flavor.scalar(b"rgb");
                     self.token_tape.push(TextToken::Scalar(scalar));
                 }
 
@@ -503,12 +563,12 @@ impl<'a, 'b> ParserState<'a, 'b> {
                     }
                     _ => {
                         state = ParseState::Key;
-                        let scalar = Scalar::new(b"rgb");
+                        let scalar = self.flavor.scalar(b"rgb");
                         self.token_tape.push(TextToken::Scalar(scalar));
                     }
                 },
                 ParseState::RgbR => {
-                    let (r, rest) = ParserState::split_at_scalar(data);
+                    let (r, rest) = Windows1252::split_at_scalar(data);
                     if let Ok(x) = r.to_u64() {
                         red = x as u32;
                     } else {
@@ -522,7 +582,7 @@ impl<'a, 'b> ParserState<'a, 'b> {
                     data = rest;
                 }
                 ParseState::RgbG => {
-                    let (r, rest) = ParserState::split_at_scalar(data);
+                    let (r, rest) = Windows1252::split_at_scalar(data);
                     if let Ok(x) = r.to_u64() {
                         green = x as u32;
                     } else {
@@ -536,7 +596,7 @@ impl<'a, 'b> ParserState<'a, 'b> {
                     data = rest;
                 }
                 ParseState::RgbB => {
-                    let (r, rest) = ParserState::split_at_scalar(data);
+                    let (r, rest) = Windows1252::split_at_scalar(data);
                     if let Ok(x) = r.to_u64() {
                         blue = x as u32;
                     } else {
@@ -597,8 +657,8 @@ unsafe fn forward_search<F: Fn(u8) -> bool>(
 mod tests {
     use super::*;
 
-    fn parse<'a>(data: &'a [u8]) -> Result<TextTape<'a>, Error> {
-        TextTape::from_slice(data)
+    fn parse<'a>(data: &'a [u8]) -> Result<TextTape<Scalar1252<'a>>, Error> {
+        text_parser_windows1252().parse_slice(data)
     }
 
     #[test]
@@ -608,8 +668,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
-                TextToken::Scalar(Scalar::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
             ]
         );
     }
@@ -617,7 +677,7 @@ mod tests {
     #[test]
     fn test_error_offset() {
         let data = b"foo={}} a=c";
-        let err = TextTape::from_slice(&data[..]).unwrap_err();
+        let err = text_parser_windows1252().parse_slice(&data[..]).unwrap_err();
         match err.kind() {
             ErrorKind::StackEmpty { offset, .. } => {
                 assert_eq!(*offset, 6);
@@ -633,10 +693,10 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
-                TextToken::Scalar(Scalar::new(b"bar")),
-                TextToken::Scalar(Scalar::new(b"def")),
-                TextToken::Scalar(Scalar::new(b"qux")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"def")),
+                TextToken::Scalar(Scalar1252::new(b"qux")),
             ]
         );
     }
@@ -647,10 +707,10 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
-                TextToken::Scalar(Scalar::new(b"bar")),
-                TextToken::Scalar(Scalar::new(b"3")),
-                TextToken::Scalar(Scalar::new(b"1444.11.11")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"3")),
+                TextToken::Scalar(Scalar1252::new(b"1444.11.11")),
             ]
         );
     }
@@ -662,8 +722,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"name")),
-                TextToken::Scalar(Scalar::new(br#"Joe \"Captain\" Rogers"#)),
+                TextToken::Scalar(Scalar1252::new(b"name")),
+                TextToken::Scalar(Scalar1252::new(br#"Joe \"Captain\" Rogers"#)),
             ]
         );
     }
@@ -675,8 +735,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"name")),
-                TextToken::Scalar(Scalar::new(br#"J Rogers \"a"#)),
+                TextToken::Scalar(Scalar1252::new(b"name")),
+                TextToken::Scalar(Scalar1252::new(br#"J Rogers \"a"#)),
             ]
         );
     }
@@ -688,8 +748,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"custom_name")),
-                TextToken::Scalar(Scalar::new(br#"THE !@#$%^&*( '\"LEGION\"')"#)),
+                TextToken::Scalar(Scalar1252::new(b"custom_name")),
+                TextToken::Scalar(Scalar1252::new(br#"THE !@#$%^&*( '\"LEGION\"')"#)),
             ]
         );
     }
@@ -701,8 +761,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
-                TextToken::Scalar(Scalar::new(b"1.000")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"1.000")),
             ]
         );
     }
@@ -714,10 +774,10 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
                 TextToken::Object(4),
-                TextToken::Scalar(Scalar::new(b"bar")),
-                TextToken::Scalar(Scalar::new(b"qux")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"qux")),
                 TextToken::End(1),
             ]
         );
@@ -730,12 +790,12 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
                 TextToken::Object(6),
-                TextToken::Scalar(Scalar::new(b"bar")),
-                TextToken::Scalar(Scalar::new(b"1")),
-                TextToken::Scalar(Scalar::new(b"qux")),
-                TextToken::Scalar(Scalar::new(b"28")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"1")),
+                TextToken::Scalar(Scalar1252::new(b"qux")),
+                TextToken::Scalar(Scalar1252::new(b"28")),
                 TextToken::End(1),
             ]
         );
@@ -746,37 +806,37 @@ mod tests {
         let mut tape = TextTape::new();
 
         let data = b"foo={bar=1 qux=28}";
-        TextTape::parser()
+        text_parser_windows1252()
             .parse_slice_into_tape(data, &mut tape)
             .unwrap();
 
         assert_eq!(
             tape.tokens(),
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
                 TextToken::Object(6),
-                TextToken::Scalar(Scalar::new(b"bar")),
-                TextToken::Scalar(Scalar::new(b"1")),
-                TextToken::Scalar(Scalar::new(b"qux")),
-                TextToken::Scalar(Scalar::new(b"28")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"1")),
+                TextToken::Scalar(Scalar1252::new(b"qux")),
+                TextToken::Scalar(Scalar1252::new(b"28")),
                 TextToken::End(1),
             ]
         );
 
         let data2 = b"foo2={bar2=3 qux2=29}";
-        TextTape::parser()
+        text_parser_windows1252()
             .parse_slice_into_tape(data2, &mut tape)
             .unwrap();
 
         assert_eq!(
             tape.tokens(),
             vec![
-                TextToken::Scalar(Scalar::new(b"foo2")),
+                TextToken::Scalar(Scalar1252::new(b"foo2")),
                 TextToken::Object(6),
-                TextToken::Scalar(Scalar::new(b"bar2")),
-                TextToken::Scalar(Scalar::new(b"3")),
-                TextToken::Scalar(Scalar::new(b"qux2")),
-                TextToken::Scalar(Scalar::new(b"29")),
+                TextToken::Scalar(Scalar1252::new(b"bar2")),
+                TextToken::Scalar(Scalar1252::new(b"3")),
+                TextToken::Scalar(Scalar1252::new(b"qux2")),
+                TextToken::Scalar(Scalar1252::new(b"29")),
                 TextToken::End(1),
             ]
         );
@@ -789,9 +849,9 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"versions")),
+                TextToken::Scalar(Scalar1252::new(b"versions")),
                 TextToken::Array(3),
-                TextToken::Scalar(Scalar::new(b"1.28.3.0")),
+                TextToken::Scalar(Scalar1252::new(b"1.28.3.0")),
                 TextToken::End(1),
             ]
         );
@@ -804,10 +864,10 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"versions")),
+                TextToken::Scalar(Scalar1252::new(b"versions")),
                 TextToken::Array(4),
-                TextToken::Scalar(Scalar::new(b"1.28.3.0")),
-                TextToken::Scalar(Scalar::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"1.28.3.0")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
                 TextToken::End(1),
             ]
         );
@@ -820,10 +880,10 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
                 TextToken::Object(4),
-                TextToken::Scalar(Scalar::new(b"bar")),
-                TextToken::Scalar(Scalar::new(b"qux")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"qux")),
                 TextToken::End(1),
             ]
         );
@@ -836,7 +896,7 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"discovered_by")),
+                TextToken::Scalar(Scalar1252::new(b"discovered_by")),
                 TextToken::Array(2),
                 TextToken::End(1),
             ]
@@ -850,19 +910,19 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"stats")),
+                TextToken::Scalar(Scalar1252::new(b"stats")),
                 TextToken::Array(14),
                 TextToken::Object(7),
-                TextToken::Scalar(Scalar::new(b"id")),
-                TextToken::Scalar(Scalar::new(b"0")),
-                TextToken::Scalar(Scalar::new(b"type")),
-                TextToken::Scalar(Scalar::new(b"general")),
+                TextToken::Scalar(Scalar1252::new(b"id")),
+                TextToken::Scalar(Scalar1252::new(b"0")),
+                TextToken::Scalar(Scalar1252::new(b"type")),
+                TextToken::Scalar(Scalar1252::new(b"general")),
                 TextToken::End(2),
                 TextToken::Object(13),
-                TextToken::Scalar(Scalar::new(b"id")),
-                TextToken::Scalar(Scalar::new(b"1")),
-                TextToken::Scalar(Scalar::new(b"type")),
-                TextToken::Scalar(Scalar::new(b"admiral")),
+                TextToken::Scalar(Scalar1252::new(b"id")),
+                TextToken::Scalar(Scalar1252::new(b"1")),
+                TextToken::Scalar(Scalar1252::new(b"type")),
+                TextToken::Scalar(Scalar1252::new(b"admiral")),
                 TextToken::End(8),
                 TextToken::End(1),
             ]
@@ -876,13 +936,13 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
                 TextToken::Object(4),
-                TextToken::Scalar(Scalar::new(b"bar")),
-                TextToken::Scalar(Scalar::new(b"val")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"val")),
                 TextToken::End(1),
-                TextToken::Scalar(Scalar::new(b"me")),
-                TextToken::Scalar(Scalar::new(b"you")),
+                TextToken::Scalar(Scalar1252::new(b"me")),
+                TextToken::Scalar(Scalar1252::new(b"you")),
             ]
         );
     }
@@ -894,15 +954,15 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"army")),
+                TextToken::Scalar(Scalar1252::new(b"army")),
                 TextToken::Object(4),
-                TextToken::Scalar(Scalar::new(b"name")),
-                TextToken::Scalar(Scalar::new(b"abc")),
+                TextToken::Scalar(Scalar1252::new(b"name")),
+                TextToken::Scalar(Scalar1252::new(b"abc")),
                 TextToken::End(1),
-                TextToken::Scalar(Scalar::new(b"army")),
+                TextToken::Scalar(Scalar1252::new(b"army")),
                 TextToken::Object(9),
-                TextToken::Scalar(Scalar::new(b"name")),
-                TextToken::Scalar(Scalar::new(b"def")),
+                TextToken::Scalar(Scalar1252::new(b"name")),
+                TextToken::Scalar(Scalar1252::new(b"def")),
                 TextToken::End(6),
             ]
         );
@@ -920,19 +980,19 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"brittany_area")),
+                TextToken::Scalar(Scalar1252::new(b"brittany_area")),
                 TextToken::Object(13),
-                TextToken::Scalar(Scalar::new(b"color")),
+                TextToken::Scalar(Scalar1252::new(b"color")),
                 TextToken::Array(7),
-                TextToken::Scalar(Scalar::new(b"118")),
-                TextToken::Scalar(Scalar::new(b"99")),
-                TextToken::Scalar(Scalar::new(b"151")),
+                TextToken::Scalar(Scalar1252::new(b"118")),
+                TextToken::Scalar(Scalar1252::new(b"99")),
+                TextToken::Scalar(Scalar1252::new(b"151")),
                 TextToken::End(3),
-                TextToken::Scalar(Scalar::new(b"169")),
-                TextToken::Scalar(Scalar::new(b"170")),
-                TextToken::Scalar(Scalar::new(b"171")),
-                TextToken::Scalar(Scalar::new(b"172")),
-                TextToken::Scalar(Scalar::new(b"4384")),
+                TextToken::Scalar(Scalar1252::new(b"169")),
+                TextToken::Scalar(Scalar1252::new(b"170")),
+                TextToken::Scalar(Scalar1252::new(b"171")),
+                TextToken::Scalar(Scalar1252::new(b"172")),
+                TextToken::Scalar(Scalar1252::new(b"4384")),
                 TextToken::End(1),
             ]
         );
@@ -967,10 +1027,10 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
-                TextToken::Scalar(Scalar::new(b"abc")),
-                TextToken::Scalar(Scalar::new(b"bar")),
-                TextToken::Scalar(Scalar::new(b"qux")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"abc")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"qux")),
             ]
         );
     }
@@ -982,8 +1042,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"flavor_tur.8")),
-                TextToken::Scalar(Scalar::new(b"yes")),
+                TextToken::Scalar(Scalar1252::new(b"flavor_tur.8")),
+                TextToken::Scalar(Scalar1252::new(b"yes")),
             ]
         );
     }
@@ -996,8 +1056,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"dashed-identifier")),
-                TextToken::Scalar(Scalar::new(b"yes")),
+                TextToken::Scalar(Scalar1252::new(b"dashed-identifier")),
+                TextToken::Scalar(Scalar1252::new(b"yes")),
             ]
         );
     }
@@ -1009,8 +1069,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"province_id")),
-                TextToken::Scalar(Scalar::new(b"event_target:agenda_province")),
+                TextToken::Scalar(Scalar1252::new(b"province_id")),
+                TextToken::Scalar(Scalar1252::new(b"event_target:agenda_province")),
             ]
         );
     }
@@ -1022,8 +1082,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"@planet_standard_scale")),
-                TextToken::Scalar(Scalar::new(b"11")),
+                TextToken::Scalar(Scalar1252::new(b"@planet_standard_scale")),
+                TextToken::Scalar(Scalar1252::new(b"11")),
             ]
         );
     }
@@ -1035,8 +1095,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"=")),
-                TextToken::Scalar(Scalar::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"=")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
             ]
         );
     }
@@ -1053,10 +1113,10 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
-                TextToken::Scalar(Scalar::new(b"1.000")),
-                TextToken::Scalar(Scalar::new(b"foo")),
-                TextToken::Scalar(Scalar::new(b"2.000")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"1.000")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"2.000")),
             ]
         );
     }
@@ -1067,8 +1127,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"foo")),
-                TextToken::Scalar(Scalar::new(b"a")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"a")),
             ]
         );
     }
@@ -1080,8 +1140,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"name")),
-                TextToken::Scalar(Scalar::new(b"rgb")),
+                TextToken::Scalar(Scalar1252::new(b"name")),
+                TextToken::Scalar(Scalar1252::new(b"rgb")),
             ]
         );
     }
@@ -1093,10 +1153,10 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"name")),
-                TextToken::Scalar(Scalar::new(b"rgb")),
-                TextToken::Scalar(Scalar::new(b"type")),
-                TextToken::Scalar(Scalar::new(b"4713")),
+                TextToken::Scalar(Scalar1252::new(b"name")),
+                TextToken::Scalar(Scalar1252::new(b"rgb")),
+                TextToken::Scalar(Scalar1252::new(b"type")),
+                TextToken::Scalar(Scalar1252::new(b"4713")),
             ]
         );
     }
@@ -1108,8 +1168,8 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"name")),
-                TextToken::Scalar(Scalar::new(b"rgbeffect")),
+                TextToken::Scalar(Scalar1252::new(b"name")),
+                TextToken::Scalar(Scalar1252::new(b"rgbeffect")),
             ]
         );
     }
@@ -1121,7 +1181,7 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"color")),
+                TextToken::Scalar(Scalar1252::new(b"color")),
                 TextToken::Rgb(Box::new(Rgb {
                     r: 100,
                     g: 200,
@@ -1137,20 +1197,20 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"levels")),
+                TextToken::Scalar(Scalar1252::new(b"levels")),
                 TextToken::Array(9),
-                TextToken::Scalar(Scalar::new(b"10")),
+                TextToken::Scalar(Scalar1252::new(b"10")),
                 TextToken::Object(8),
-                TextToken::Scalar(Scalar::new(b"0")),
-                TextToken::Scalar(Scalar::new(b"2")),
-                TextToken::Scalar(Scalar::new(b"1")),
-                TextToken::Scalar(Scalar::new(b"2")),
+                TextToken::Scalar(Scalar1252::new(b"0")),
+                TextToken::Scalar(Scalar1252::new(b"2")),
+                TextToken::Scalar(Scalar1252::new(b"1")),
+                TextToken::Scalar(Scalar1252::new(b"2")),
                 TextToken::End(3),
                 TextToken::End(1),
-                TextToken::Scalar(Scalar::new(b"foo")),
+                TextToken::Scalar(Scalar1252::new(b"foo")),
                 TextToken::Object(14),
-                TextToken::Scalar(Scalar::new(b"bar")),
-                TextToken::Scalar(Scalar::new(b"qux")),
+                TextToken::Scalar(Scalar1252::new(b"bar")),
+                TextToken::Scalar(Scalar1252::new(b"qux")),
                 TextToken::End(11),
             ]
         );
@@ -1163,16 +1223,16 @@ mod tests {
         assert_eq!(
             parse(&data[..]).unwrap().token_tape,
             vec![
-                TextToken::Scalar(Scalar::new(b"16778374")),
+                TextToken::Scalar(Scalar1252::new(b"16778374")),
                 TextToken::Object(12),
-                TextToken::Scalar(Scalar::new(b"levels")),
+                TextToken::Scalar(Scalar1252::new(b"levels")),
                 TextToken::Array(11),
-                TextToken::Scalar(Scalar::new(b"10")),
+                TextToken::Scalar(Scalar1252::new(b"10")),
                 TextToken::Object(10),
-                TextToken::Scalar(Scalar::new(b"0")),
-                TextToken::Scalar(Scalar::new(b"2")),
-                TextToken::Scalar(Scalar::new(b"1")),
-                TextToken::Scalar(Scalar::new(b"2")),
+                TextToken::Scalar(Scalar1252::new(b"0")),
+                TextToken::Scalar(Scalar1252::new(b"2")),
+                TextToken::Scalar(Scalar1252::new(b"1")),
+                TextToken::Scalar(Scalar1252::new(b"2")),
                 TextToken::End(5),
                 TextToken::End(3),
                 TextToken::End(1),

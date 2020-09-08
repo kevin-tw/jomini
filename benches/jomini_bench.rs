@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use jomini::{BinaryDeserializer, BinaryTape, Scalar, TextDeserializer, TextTape};
+use jomini::{BinaryDeserializer, BinaryTape, Scalar1252, Scalar, TextDeserializer, TextTape, BinaryParser};
 use std::collections::HashMap;
 
 const METADATA_BIN: &'static [u8] = include_bytes!("../tests/fixtures/meta.bin");
@@ -11,7 +11,7 @@ pub fn is_ascii_benchmark(c: &mut Criterion) {
         let data = vec![b'a'; *size as usize];
         group.throughput(Throughput::Bytes(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &_size| {
-            b.iter(|| Scalar::new(black_box(&data)).is_ascii());
+            b.iter(|| Scalar1252::new(black_box(&data)).is_ascii());
         });
     }
     group.finish();
@@ -23,12 +23,12 @@ pub fn from_ascii_string_benchmark(c: &mut Criterion) {
         let data = vec![b'a'; *size as usize];
         group.throughput(Throughput::Bytes(*size as u64));
         group.bench_with_input(BenchmarkId::new("to-utf8", size), size, |b, &_size| {
-            b.iter(|| Scalar::new(black_box(&data)).to_utf8())
+            b.iter(|| Scalar1252::new(black_box(&data)).to_utf8())
         });
         group.bench_with_input(
             BenchmarkId::new("to-utf8-owned", size),
             size,
-            |b, &_size| b.iter(|| Scalar::new(black_box(&data)).to_utf8_owned()),
+            |b, &_size| b.iter(|| Scalar1252::new(black_box(&data)).to_utf8_owned()),
         );
     }
     group.finish();
@@ -40,7 +40,7 @@ pub fn from_windows_string_benchmark(c: &mut Criterion) {
         let data = vec![0xfe; *size as usize];
         group.throughput(Throughput::Bytes(*size as u64));
         group.bench_with_input(BenchmarkId::new("to-utf8", size), size, |b, &_size| {
-            b.iter(|| Scalar::new(black_box(&data)).to_utf8())
+            b.iter(|| Scalar1252::new(black_box(&data)).to_utf8())
         });
     }
     group.finish();
@@ -49,7 +49,7 @@ pub fn from_windows_string_benchmark(c: &mut Criterion) {
 pub fn to_u64_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("to_u64");
     for input in [&b"1444"[..], &b"20405029"[..]].iter() {
-        let data = Scalar::new(input);
+        let data = Scalar1252::new(input);
         let ins = std::str::from_utf8(input).unwrap();
         group.bench_with_input(BenchmarkId::from_parameter(ins), &data, |b, &data| {
             b.iter(|| black_box(data.to_u64().unwrap()))
@@ -60,7 +60,7 @@ pub fn to_u64_benchmark(c: &mut Criterion) {
 
 pub fn to_f64_benchmark(c: &mut Criterion) {
     c.bench_function("to_f64", |b| {
-        b.iter(|| Scalar::new(b"20405029.125").to_f64())
+        b.iter(|| Scalar1252::new(b"20405029.125").to_f64())
     });
 }
 
@@ -105,9 +105,9 @@ pub fn binary_parse_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("parse");
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("binary", |b| {
-        let mut tape = BinaryTape::default();
+        let mut tape = BinaryTape::new();
         b.iter(move || {
-            BinaryTape::parser()
+            BinaryParser::windows_1252_parser()
                 .parse_slice_into_tape(&data[..], &mut tape)
                 .unwrap();
         })
@@ -120,9 +120,9 @@ pub fn text_parse_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("parse");
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("text", |b| {
-        let mut tape = TextTape::default();
+        let mut tape = TextTape::new();
         b.iter(|| {
-            TextTape::parser()
+            jomini::text_parser_windows1252()
                 .parse_slice_into_tape(&data[..], &mut tape)
                 .unwrap();
         })

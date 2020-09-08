@@ -8,22 +8,22 @@ use std::fmt;
 /// An error that can occur when converting a scalar into the requested type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScalarError {
-    /// The given string did not contain only numbers
-    AllDigits(String),
+    /// The given scalar did not contain only numbers
+    AllDigits,
 
-    /// The given string caused an overflow when calculating its numerical value
-    Overflow(String),
+    /// The given scalar caused an overflow when calculating its numerical value
+    Overflow,
 
-    /// The given string was not a recognized boolean value
-    InvalidBool(String),
+    /// The given scalar was not a recognized boolean value
+    InvalidBool,
 }
 
 impl fmt::Display for ScalarError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ScalarError::AllDigits(x) => write!(f, "did not contain all digits: {}", x),
-            ScalarError::InvalidBool(x) => write!(f, "is not a valid bool: {}", x),
-            ScalarError::Overflow(x) => write!(f, "caused an overflow: {}", x),
+            ScalarError::AllDigits => write!(f, "scalar did not contain all digits"),
+            ScalarError::InvalidBool => write!(f, "scalar is not a valid bool"),
+            ScalarError::Overflow => write!(f, "scalar caused an overflow"),
         }
     }
 }
@@ -31,6 +31,64 @@ impl fmt::Display for ScalarError {
 impl error::Error for ScalarError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         None
+    }
+}
+
+pub trait Scalar<'a>: std::fmt::Debug + Copy {
+    /// View the underlying data
+    fn view_data(&self) -> &'a [u8];
+    fn to_utf8(&self) -> Cow<'a, str>;
+    fn to_utf8_owned(&self) -> String;
+
+    fn to_f64(&self) -> Result<f64, ScalarError> {
+        to_f64(self.view_data())
+    }
+
+    fn to_bool(&self) -> Result<bool, ScalarError> {
+        to_bool(self.view_data())
+    }
+
+    fn to_i64(&self) -> Result<i64, ScalarError> {
+        to_i64(self.view_data())
+    }
+
+    fn to_u64(&self) -> Result<u64, ScalarError> {
+        to_u64(self.view_data())
+    }
+
+    fn is_ascii(&self) -> bool {
+        is_ascii(self.view_data())
+    }
+}
+
+#[derive(PartialEq, Copy, Clone)]
+pub struct ScalarUtf8<'a> {
+    data: &'a [u8],
+}
+
+impl<'a> Scalar<'a> for ScalarUtf8<'a> {
+    fn view_data(&self) -> &'a [u8] {
+        self.data
+    }
+
+    fn to_utf8(&self) -> Cow<'a, str> {
+        String::from_utf8_lossy(self.data)
+    }
+
+    fn to_utf8_owned(&self) -> String {
+        String::from_utf8_lossy(self.data).into_owned()
+    }
+}
+
+impl<'a> fmt::Debug for ScalarUtf8<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ScalarUtf8 {{ {} }}", self)
+    }
+}
+
+impl<'a> fmt::Display for ScalarUtf8<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_utf8())
     }
 }
 
@@ -49,161 +107,50 @@ impl error::Error for ScalarError {
 /// assert!(v1.to_bool().is_err());
 /// ```
 #[derive(PartialEq, Copy, Clone)]
-pub struct Scalar<'a> {
+pub struct Scalar1252<'a> {
     data: &'a [u8],
 }
 
-impl<'a> Scalar<'a> {
+impl<'a> Scalar1252<'a> {
     /// Create a new scalar backed by windows-1252 encoded byte slice
-    pub fn new(data: &'a [u8]) -> Scalar<'a> {
-        Scalar { data }
+    pub fn new(data: &'a [u8]) -> Scalar1252<'a> {
+        Scalar1252 { data }
     }
+}
 
-    /// View the underlying windows-1252 encoded data
-    pub fn view_data(&self) -> &[u8] {
+impl<'a> Scalar<'a> for Scalar1252<'a> {
+    fn view_data(&self) -> &'a [u8] {
         self.data
     }
 
-    /// Try converting the scalar to f64
-    ///
-    /// ```
-    /// use jomini::Scalar;
-    ///
-    /// let v1 = Scalar::new(b"1.000");
-    /// assert_eq!(v1.to_f64(), Ok(1.0));
-    ///
-    /// let v2 = Scalar::new(b"-5.67821");
-    /// assert_eq!(v2.to_f64(), Ok(-5.67821));
-    /// ```
-    pub fn to_f64(&self) -> Result<f64, ScalarError> {
-        to_f64(self.data)
+    fn to_utf8(&self) -> Cow<'a, str> {
+        windows_1252_to_utf8(self.data)
     }
 
-    /// Try converting the scalar to boolean, only "yes" and "no" can be mapped:
-    ///
-    /// ```
-    /// use jomini::Scalar;
-    ///
-    /// let v1 = Scalar::new(b"yes");
-    /// assert_eq!(v1.to_bool(), Ok(true));
-    ///
-    /// let v2 = Scalar::new(b"no");
-    /// assert_eq!(v2.to_bool(), Ok(false));
-    /// ```
-    pub fn to_bool(&self) -> Result<bool, ScalarError> {
-        to_bool(self.data)
-    }
-
-    /// Try converting the scalar to i64
-    ///
-    /// ```
-    /// use jomini::Scalar;
-    ///
-    /// let v1 = Scalar::new(b"-50");
-    /// assert_eq!(v1.to_i64(), Ok(-50));
-    ///
-    /// let v2 = Scalar::new(b"120");
-    /// assert_eq!(v2.to_i64(), Ok(120));
-    /// ```
-    pub fn to_i64(&self) -> Result<i64, ScalarError> {
-        to_i64(self.data)
-    }
-
-    /// Try converting the scalar to u64
-    ///
-    /// ```
-    /// use jomini::Scalar;
-    ///
-    /// let v1 = Scalar::new(b"50");
-    /// assert_eq!(v1.to_i64(), Ok(50));
-    ///
-    /// let v2 = Scalar::new(b"120");
-    /// assert_eq!(v2.to_i64(), Ok(120));
-    /// ```
-    pub fn to_u64(&self) -> Result<u64, ScalarError> {
-        to_u64(self.data)
-    }
-
-    /// Convert scalar data into utf8. Several transformations take place:
-    ///
-    /// - trailing whitespace is removed
-    /// - escape sequences are unescaped
-    /// - windows-1252 specific characters encoded as their utf-8 equivalent.
-    ///
-    /// This function is optimized for the typical scenario, where the utf-8
-    /// string can be calculated without allocation. If escape sequences or
-    /// windows-1252 specific characters are encountered, then allocation is
-    /// necessary.
-    ///
-    /// ```
-    /// use jomini::Scalar;
-    ///
-    /// let v1 = Scalar::new(b"Common Sense");
-    /// assert_eq!(v1.to_utf8(), "Common Sense");
-    ///
-    /// let v2 = Scalar::new(b"\xa7GRichard Plantagenet\xa7 ( 2 / 4 / 3 / 0 )");
-    /// assert_eq!(v2.to_utf8(), "§GRichard Plantagenet§ ( 2 / 4 / 3 / 0 )");
-    ///
-    /// let v3 = Scalar::new(br#"Captain \"Joe\" Rogers"#);
-    /// assert_eq!(v3.to_utf8(), r#"Captain "Joe" Rogers"#);
-    ///
-    /// let v4 = Scalar::new(b"1444.11.11\n");
-    /// assert_eq!(v4.to_utf8(), "1444.11.11");
-    /// ```
-    pub fn to_utf8(&self) -> Cow<'a, str> {
-        to_utf8(self.data)
-    }
-
-    /// Convert scalar data into an owned string
-    ///
-    /// ```
-    /// use jomini::Scalar;
-    ///
-    /// let v1 = Scalar::new(b"a");
-    /// assert_eq!(v1.to_utf8(), String::from("a"));
-    ///
-    /// let v2 = Scalar::new(&[255][..]);
-    /// assert_eq!(v2.to_utf8(), String::from("ÿ"));
-    /// ```
-    pub fn to_utf8_owned(&self) -> String {
-        to_utf8_owned(self.data)
-    }
-
-    /// Returns if the scalar contains only ascii values
-    ///
-    /// ```
-    /// use jomini::Scalar;
-    ///
-    /// let v1 = Scalar::new(b"a");
-    /// assert!(v1.is_ascii());
-    ///
-    /// let v2 = Scalar::new(&[255][..]);
-    /// assert!(!v2.is_ascii());
-    /// ```
-    pub fn is_ascii(&self) -> bool {
-        is_ascii(self.data)
+    fn to_utf8_owned(&self) -> String {
+        windows_1252_to_utf8_owned(self.data)
     }
 }
 
-impl<'a> fmt::Debug for Scalar<'a> {
+impl<'a> fmt::Debug for Scalar1252<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Scalar {{ {} }}", self)
+        write!(f, "Scalar1252 {{ {} }}", self)
     }
 }
 
-impl<'a> fmt::Display for Scalar<'a> {
+impl<'a> fmt::Display for Scalar1252<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_utf8())
     }
 }
 
 #[inline]
-fn to_utf8_owned(d: &[u8]) -> String {
-    to_utf8(d).to_string()
+fn windows_1252_to_utf8_owned(d: &[u8]) -> String {
+    windows_1252_to_utf8(d).to_string()
 }
 
 #[inline]
-fn to_utf8(mut d: &[u8]) -> Cow<str> {
+fn windows_1252_to_utf8(mut d: &[u8]) -> Cow<str> {
     // First we check if there is trailing whitespace and if there is, we trim it down.
     // This branch won't normally be taken, so it should be considered cheap
     if !d.is_empty() && is_whitespace(d[d.len() - 1]) {
@@ -265,7 +212,7 @@ fn to_bool(d: &[u8]) -> Result<bool, ScalarError> {
     match d {
         [b'y', b'e', b's'] => Ok(true),
         [b'n', b'o'] => Ok(false),
-        x => Err(ScalarError::InvalidBool(to_utf8_owned(x))),
+        _ => Err(ScalarError::InvalidBool),
     }
 }
 
@@ -306,7 +253,7 @@ fn to_f64(d: &[u8]) -> Result<f64, ScalarError> {
             let frac = to_i64(&trail)? as f64;
             let digits = 10u32
                 .checked_pow(trail.len() as u32)
-                .ok_or_else(|| ScalarError::Overflow(to_utf8_owned(d)))?
+                .ok_or_else(|| ScalarError::Overflow)?
                 as f64;
             Ok((sign as f64).mul_add(frac / digits, leadf))
         }
@@ -328,14 +275,14 @@ fn to_u64(d: &[u8]) -> Result<u64, ScalarError> {
     const POWER10: [u64; 8] = [10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1];
 
     if d.is_empty() {
-        return Err(ScalarError::AllDigits(to_utf8_owned(d)));
+        return Err(ScalarError::AllDigits);
     }
 
     let mut chunks = d.chunks_exact(8);
     let all_digits = chunks.all(is_digits_wide);
     let remainder = chunks.remainder();
     if !(all_digits & is_digits(&remainder)) {
-        return Err(ScalarError::AllDigits(to_utf8_owned(d)));
+        return Err(ScalarError::AllDigits);
     }
 
     let mut result: u64 = 0;
@@ -347,21 +294,21 @@ fn to_u64(d: &[u8]) -> Result<u64, ScalarError> {
             .checked_mul(100_000_000)
             .and_then(|x| x.checked_add(ascii_u64_to_digits(val)))
             .and_then(|x| x.checked_add(result))
-            .ok_or_else(|| ScalarError::Overflow(to_utf8_owned(d)))?;
+            .ok_or_else(|| ScalarError::Overflow)?;
     }
 
     if result != 0 {
         result = 10_u64
             .checked_pow(remainder.len() as u32)
             .and_then(|x| result.checked_mul(x))
-            .ok_or_else(|| ScalarError::Overflow(to_utf8_owned(d)))?;
+            .ok_or_else(|| ScalarError::Overflow)?;
     }
 
     let maxxed = 8 - remainder.len();
     for (i, &x) in remainder.iter().enumerate() {
         result = result
             .checked_add(u64::from(x - b'0') * POWER10[maxxed + i])
-            .ok_or_else(|| ScalarError::Overflow(to_utf8_owned(d)))?;
+            .ok_or_else(|| ScalarError::Overflow)?;
     }
 
     Ok(result)
@@ -374,17 +321,17 @@ mod tests {
 
     #[test]
     fn scalar_to_string() {
-        assert_eq!((Scalar { data: &[255][..] }).to_string(), "ÿ".to_string());
-        assert_eq!((Scalar { data: &[138][..] }).to_string(), "Š".to_string());
+        assert_eq!((Scalar1252 { data: &[255][..] }).to_string(), "ÿ".to_string());
+        assert_eq!((Scalar1252 { data: &[138][..] }).to_string(), "Š".to_string());
         assert_eq!(
-            (Scalar {
+            (Scalar1252 {
                 data: b"hello world"
             })
             .to_string(),
             "hello world".to_string()
         );
         assert_eq!(
-            (Scalar {
+            (Scalar1252 {
                 data: &[104, 105, 129, 138][..]
             })
             .to_string(),
@@ -392,7 +339,7 @@ mod tests {
         );
 
         assert_eq!(
-            (Scalar {
+            (Scalar1252 {
                 data: &[0xfe, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe, 0xff]
             })
             .to_string(),
@@ -402,107 +349,107 @@ mod tests {
 
     #[test]
     fn scalar_string_trim_end_newlines() {
-        assert_eq!(Scalar::new(b"new\n").to_utf8().as_ref(), "new");
-        assert_eq!(Scalar::new(b"\t").to_utf8().as_ref(), "");
+        assert_eq!(Scalar1252::new(b"new\n").to_utf8().as_ref(), "new");
+        assert_eq!(Scalar1252::new(b"\t").to_utf8().as_ref(), "");
     }
 
     #[test]
     fn scalar_to_bool() {
-        assert_eq!((Scalar::new(b"yes").to_bool()), Ok(true));
-        assert_eq!((Scalar::new(b"no").to_bool()), Ok(false));
-        assert_eq!((Scalar::new(b"-1").to_f64()), Ok(-1.0));
+        assert_eq!((Scalar1252::new(b"yes").to_bool()), Ok(true));
+        assert_eq!((Scalar1252::new(b"no").to_bool()), Ok(false));
+        assert_eq!((Scalar1252::new(b"-1").to_f64()), Ok(-1.0));
     }
 
     #[test]
     fn scalar_to_f64() {
-        assert_eq!((Scalar::new(b"0").to_f64()), Ok(0.0));
-        assert_eq!((Scalar::new(b"1").to_f64()), Ok(1.0));
-        assert_eq!((Scalar::new(b"-1").to_f64()), Ok(-1.0));
-        assert_eq!((Scalar::new(b"-10000").to_f64()), Ok(-10000.0));
-        assert_eq!((Scalar::new(b"10000").to_f64()), Ok(10000.0));
-        assert_eq!((Scalar::new(b"20405029").to_f64()), Ok(20405029.0));
-        assert_eq!((Scalar::new(b"-20405029").to_f64()), Ok(-20405029.0));
+        assert_eq!((Scalar1252::new(b"0").to_f64()), Ok(0.0));
+        assert_eq!((Scalar1252::new(b"1").to_f64()), Ok(1.0));
+        assert_eq!((Scalar1252::new(b"-1").to_f64()), Ok(-1.0));
+        assert_eq!((Scalar1252::new(b"-10000").to_f64()), Ok(-10000.0));
+        assert_eq!((Scalar1252::new(b"10000").to_f64()), Ok(10000.0));
+        assert_eq!((Scalar1252::new(b"20405029").to_f64()), Ok(20405029.0));
+        assert_eq!((Scalar1252::new(b"-20405029").to_f64()), Ok(-20405029.0));
         assert_eq!(
-            (Scalar::new(b"20405029553322").to_f64()),
+            (Scalar1252::new(b"20405029553322").to_f64()),
             Ok(20405029553322.0)
         );
         assert_eq!(
-            (Scalar::new(b"-20405029553322").to_f64()),
+            (Scalar1252::new(b"-20405029553322").to_f64()),
             Ok(-20405029553322.0)
         );
 
-        assert_eq!((Scalar::new(b"0.504").to_f64()), Ok(0.504));
-        assert_eq!((Scalar::new(b"1.00125").to_f64()), Ok(1.00125));
-        assert_eq!((Scalar::new(b"-1.50000").to_f64()), Ok(-1.5));
-        assert_eq!((Scalar::new(b"-10000.0").to_f64()), Ok(-10000.0));
-        assert_eq!((Scalar::new(b"10000.000").to_f64()), Ok(10000.0));
-        assert_eq!((Scalar::new(b"20405029.125").to_f64()), Ok(20405029.125));
-        assert_eq!((Scalar::new(b"-20405029.125").to_f64()), Ok(-20405029.125));
+        assert_eq!((Scalar1252::new(b"0.504").to_f64()), Ok(0.504));
+        assert_eq!((Scalar1252::new(b"1.00125").to_f64()), Ok(1.00125));
+        assert_eq!((Scalar1252::new(b"-1.50000").to_f64()), Ok(-1.5));
+        assert_eq!((Scalar1252::new(b"-10000.0").to_f64()), Ok(-10000.0));
+        assert_eq!((Scalar1252::new(b"10000.000").to_f64()), Ok(10000.0));
+        assert_eq!((Scalar1252::new(b"20405029.125").to_f64()), Ok(20405029.125));
+        assert_eq!((Scalar1252::new(b"-20405029.125").to_f64()), Ok(-20405029.125));
         assert_eq!(
-            (Scalar::new(b"20405029553322.015").to_f64()),
+            (Scalar1252::new(b"20405029553322.015").to_f64()),
             Ok(20405029553322.015)
         );
         assert_eq!(
-            (Scalar::new(b"-20405029553322.015").to_f64()),
+            (Scalar1252::new(b"-20405029553322.015").to_f64()),
             Ok(-20405029553322.015)
         );
     }
 
     #[test]
     fn scalar_to_i64() {
-        assert_eq!((Scalar::new(b"0").to_i64()), Ok(0));
-        assert_eq!((Scalar::new(b"1").to_i64()), Ok(1));
-        assert_eq!((Scalar::new(b"-1").to_i64()), Ok(-1));
-        assert_eq!((Scalar::new(b"-10000").to_i64()), Ok(-10000));
-        assert_eq!((Scalar::new(b"10000").to_i64()), Ok(10000));
-        assert_eq!((Scalar::new(b"20405029").to_i64()), Ok(20405029));
-        assert_eq!((Scalar::new(b"-20405029").to_i64()), Ok(-20405029));
+        assert_eq!((Scalar1252::new(b"0").to_i64()), Ok(0));
+        assert_eq!((Scalar1252::new(b"1").to_i64()), Ok(1));
+        assert_eq!((Scalar1252::new(b"-1").to_i64()), Ok(-1));
+        assert_eq!((Scalar1252::new(b"-10000").to_i64()), Ok(-10000));
+        assert_eq!((Scalar1252::new(b"10000").to_i64()), Ok(10000));
+        assert_eq!((Scalar1252::new(b"20405029").to_i64()), Ok(20405029));
+        assert_eq!((Scalar1252::new(b"-20405029").to_i64()), Ok(-20405029));
         assert_eq!(
-            (Scalar::new(b"20405029553322").to_i64()),
+            (Scalar1252::new(b"20405029553322").to_i64()),
             Ok(20405029553322)
         );
         assert_eq!(
-            (Scalar::new(b"-20405029553322").to_i64()),
+            (Scalar1252::new(b"-20405029553322").to_i64()),
             Ok(-20405029553322)
         );
     }
 
     #[test]
     fn scalar_to_u64() {
-        assert_eq!((Scalar::new(b"0").to_u64()), Ok(0));
-        assert_eq!((Scalar::new(b"1").to_u64()), Ok(1));
-        assert_eq!((Scalar::new(b"45").to_u64()), Ok(45));
-        assert_eq!((Scalar::new(b"10000").to_u64()), Ok(10000));
-        assert_eq!((Scalar::new(b"20405029").to_u64()), Ok(20405029));
+        assert_eq!((Scalar1252::new(b"0").to_u64()), Ok(0));
+        assert_eq!((Scalar1252::new(b"1").to_u64()), Ok(1));
+        assert_eq!((Scalar1252::new(b"45").to_u64()), Ok(45));
+        assert_eq!((Scalar1252::new(b"10000").to_u64()), Ok(10000));
+        assert_eq!((Scalar1252::new(b"20405029").to_u64()), Ok(20405029));
         assert_eq!(
-            (Scalar::new(b"20405029553322").to_u64()),
+            (Scalar1252::new(b"20405029553322").to_u64()),
             Ok(20405029553322)
         );
     }
 
     #[test]
     fn scalar_to_u64_overflow() {
-        assert!(Scalar::new(b"888888888888888888888888888888888")
+        assert!(Scalar1252::new(b"888888888888888888888888888888888")
             .to_u64()
             .is_err());
-        assert!(Scalar::new(b"666666666666666685902").to_u64().is_err());
+        assert!(Scalar1252::new(b"666666666666666685902").to_u64().is_err());
     }
 
     #[test]
     fn scalar_to_f64_overflow() {
-        assert!(Scalar::new(b"9999999999.99999999999999999")
+        assert!(Scalar1252::new(b"9999999999.99999999999999999")
             .to_f64()
             .is_err());
-        assert!(Scalar::new(b"999999999999999999999.999999999")
+        assert!(Scalar1252::new(b"999999999999999999999.999999999")
             .to_f64()
             .is_err());
-        assert!(Scalar::new(b"10.99999990999999999999999").to_f64().is_err());
-        assert!(Scalar::new(b"10.99999999999999").to_f64().is_err());
+        assert!(Scalar1252::new(b"10.99999990999999999999999").to_f64().is_err());
+        assert!(Scalar1252::new(b"10.99999999999999").to_f64().is_err());
     }
 
     #[test]
     fn scalar_string_escapes() {
-        let s = Scalar::new(br#"Joe \"Captain\" Rogers"#);
+        let s = Scalar1252::new(br#"Joe \"Captain\" Rogers"#);
         assert_eq!(s.to_utf8().as_ref(), r#"Joe "Captain" Rogers"#);
     }
 
@@ -514,14 +461,14 @@ mod tests {
         // mapping documents this behavior, too
 
         let data = &[0x81, 0x8d, 0x8f, 0x90, 0x9d];
-        let scalar = Scalar::new(data);
+        let scalar = Scalar1252::new(data);
         let (cow, _) = encoding_rs::WINDOWS_1252.decode_without_bom_handling(data);
         assert_eq!(scalar.to_utf8(), cow);
     }
 
     #[test]
     fn scalar_empty_string() {
-        let s = Scalar::new(b"");
+        let s = Scalar1252::new(b"");
         assert!(s.to_bool().is_err());
         assert!(s.to_f64().is_err());
         assert!(s.to_i64().is_err());
